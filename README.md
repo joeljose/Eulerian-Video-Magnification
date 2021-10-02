@@ -7,12 +7,12 @@
 spatial frequency bands, and applies the same temporal filter to all bands. The filtered spatial bands are then amplified by a given factor $\alpha$,
 added back to the original signal, and collapsed to generate the output video.</p> 
 
-##Overview of the Eulerian video magnification framework
+## Overview of the Eulerian video magnification framework
 
 
 ![](https://github.com/joeljose/assets/blob/master/EVM/EVM_flow.png?raw=True)
 
-##There are 5 steps in the algorithm pipeline:
+## There are 5 steps in the algorithm pipeline:
 1) Loading the video</br> 
 2) Spatial decomposition into laplacian pyramids</br>
 3) Temporal filtering to extract motion information, and adding that back to the original signal</br>
