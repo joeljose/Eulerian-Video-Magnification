@@ -1,10 +1,11 @@
 # Eulerian-Video-Magnification
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/joeljose/Eulerian-Video-Magnification/blob/main/Eulerian_Video_Magnification.ipynb)
 
 <p>Eulerian video magnification reveals temporal variations in videos that are difficult or impossible to see with the naked eye and display them in an indicative manner.
 </p>
 <p>We are going to create a system which takes in an input video and outputs a video that is motion magnified. The system first decomposes the input video sequence into different
-spatial frequency bands, and applies the same temporal filter to all bands. The filtered spatial bands are then amplified by a given factor $\alpha$,
+spatial frequency bands, and applies the same temporal filter to all bands. The filtered spatial bands are then amplified by a given factor α,
 added back to the original signal, and collapsed to generate the output video.</p> 
 
 ## Overview of the Eulerian video magnification framework
@@ -31,7 +32,7 @@ One drawback of this method is that we can see that we do artifacts in our video
 
 The Algorithm we use is derived from MIT CSAIL's paper, ["Eulerian Video Magnification for Revealing Subtle Changes in the World"](http://people.csail.mit.edu/mrub/papers/vidmag.pdf). I have implemented their paper using Python.
 
-You can also [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/joeljose/Eulerian-Video-Magnification/blob/main/Eulerian_Video_Magnification.ipynb)
+
 
 
 
