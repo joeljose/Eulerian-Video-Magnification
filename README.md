@@ -4,6 +4,10 @@
 
 <p>Eulerian video magnification reveals temporal variations in videos that are difficult or impossible to see with the naked eye and display them in an indicative manner.
 </p>
+
+![original](https://github.com/joeljose/assets/blob/master/EVM/a00.gif?raw=True)![20X](https://github.com/joeljose/assets/blob/master/EVM/a20.gif?raw=True)![100X](https://github.com/joeljose/assets/blob/master/EVM/a100.gif?raw=True)
+</br>**Figure.1 : Original video, 20X magnified video, and 100X magnified video.**
+
 <p>We are going to create a system which takes in an input video and outputs a video that is motion magnified. The system first decomposes the input video sequence into different
 spatial frequency bands, and applies the same temporal filter to all bands. The filtered spatial bands are then amplified by a given factor α,
 added back to the original signal, and collapsed to generate the output video.</p> 
