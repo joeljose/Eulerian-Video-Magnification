@@ -32,7 +32,7 @@ To amplify motion, EVM does not perform feature
 tracking or optical flow computation, but merely magnifies temporal color changes using spatio-temporal processing. This Eulerian based method, which temporally processes pixels in a fixed spatial
 region, successfully reveals informative signals and amplifies small motions in real-world videos.
 
-One drawback of this method is that we can see that we do artifacts in our videos as we increase amplification factor.
+One drawback of this method is that we can see that we do get artifacts in our videos as we increase the amplification factor.
 
 The Algorithm we use is derived from MIT CSAIL's paper, ["Eulerian Video Magnification for Revealing Subtle Changes in the World"](http://people.csail.mit.edu/mrub/papers/vidmag.pdf). I have implemented their paper using Python.
 
