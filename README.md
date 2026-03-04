@@ -207,6 +207,7 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
 | `--lambda-c` | 1000 | Cutoff spatial wavelength (see paper Figure 6) |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
+| `--version` | — | Show program version and exit |
 
 ### Notebook
 
