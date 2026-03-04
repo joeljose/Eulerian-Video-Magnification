@@ -16,8 +16,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY Eulerian_Video_Magnification.ipynb .
+COPY evm.py .
 
 USER ${UNAME}
 
-ENTRYPOINT ["jupyter", "notebook", "--ip=0.0.0.0", "--no-browser"]
+ENTRYPOINT ["python", "-u", "evm.py"]

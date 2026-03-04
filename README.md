@@ -25,7 +25,9 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [B. Local Setup](#b-local-setup)
   - [C. Docker](#c-docker)
 - [Usage](#usage)
-  - [Parameters](#parameters)
+  - [CLI Tool](#cli-tool)
+  - [Notebook](#notebook)
+  - [Tips](#tips)
 - [References](#references)
 
 ---
@@ -116,14 +118,23 @@ The motion $\delta(t)$ is effectively amplified to $(1 + \alpha)\delta(t)$. This
 
 ### A. Google Colab
 
-The easiest way — click the badge at the top of this README. No installation needed.
+The easiest way to try the notebook — click the badge at the top of this README. No installation needed.
 
 ### B. Local Setup
+
+**CLI tool** (recommended for processing your own videos):
 
 ```bash
 git clone https://github.com/joeljose/Eulerian-Video-Magnification.git
 cd Eulerian-Video-Magnification
 pip install -r requirements.txt
+python evm.py -i input.mp4
+```
+
+**Notebook** (for interactive exploration and learning):
+
+```bash
+pip install -r requirements.txt matplotlib requests
 jupyter notebook Eulerian_Video_Magnification.ipynb
 ```
 
@@ -138,32 +149,39 @@ jupyter notebook Eulerian_Video_Magnification.ipynb
 # Run
 docker run --rm -it \
     -v "$(pwd)":/app/data \
-    -p 8888:8888 \
-    eulerian-video-magnification
+    eulerian-video-magnification \
+    -i /app/data/input.mp4 -o /app/data/output.avi
 ```
-
-This starts a Jupyter notebook server. Open the URL printed in the terminal.
 
 ---
 
 ## Usage
 
-Open the notebook and run all cells. By default, it downloads a sample face video from the original paper and magnifies it.
+### CLI Tool
 
-**To use your own video:** change the `filename` variable in the notebook to point to your video file.
+```bash
+python evm.py -i input.mp4                          # defaults
+python evm.py -i input.mp4 -o out.avi -fl 0.5 -fh 2.0 -a 15
+python evm.py -i baby.mp4 -fl 0.1 -fh 0.5 -a 30 --pyramid-levels 6
+```
 
-### Parameters
-
-| Parameter | Default | Description |
+| Flag | Default | Description |
 |---|---|---|
-| `freq_min` | 0.5 Hz | Lower bound of temporal bandpass filter |
-| `freq_max` | 2.0 Hz | Upper bound of temporal bandpass filter |
-| `amplification` | 15 | Amplification factor ($\alpha$) |
-| `pyramid_levels` | 4 | Number of levels in the Laplacian pyramid |
-| `skip_levels_at_top` | 1 | Skip the finest pyramid levels (reduces noise) |
+| `-i / --input` | *(required)* | Input video path |
+| `-o / --output` | `<input>_magnified.avi` | Output video path |
+| `-fl / --freq-low` | 0.5 | Lower cutoff frequency (Hz) |
+| `-fh / --freq-high` | 2.0 | Upper cutoff frequency (Hz) |
+| `-a / --amplification` | 15 | Amplification factor |
+| `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
+| `--skip-levels` | 1 | Finest pyramid levels to skip |
 
-**Tips:**
-- Use `show_frequencies()` to visualize the frequency content of your video before choosing `freq_min` and `freq_max`.
+### Notebook
+
+Open the notebook and run all cells. By default, it downloads a sample face video from the original paper and magnifies it. To use your own video, change the `filename` variable.
+
+### Tips
+
+- Use `show_frequencies()` in the notebook to visualize frequency content before choosing cutoff frequencies.
 - Start with low amplification and increase gradually.
 - For pulse/color magnification: 0.5–2 Hz, high amplification (50+).
 - For motion magnification: match the frequency band to the motion you want to reveal.
