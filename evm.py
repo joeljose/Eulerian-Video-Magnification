@@ -10,6 +10,8 @@ Changes in the World", SIGGRAPH 2012.
 Algorithm follows the reference MATLAB implementation from MIT CSAIL.
 """
 
+__version__ = "2.0.0"
+
 import argparse
 import math
 import os
@@ -291,6 +293,10 @@ def main():
             "  python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 "
             "--lambda-c 10 --chrom-attenuation 0"
         )
+    )
+    parser.add_argument(
+        '--version', action='version',
+        version=f'%(prog)s {__version__}'
     )
     parser.add_argument(
         '-i', '--input', required=True,
