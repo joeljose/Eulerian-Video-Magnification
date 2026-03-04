@@ -239,7 +239,11 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     for i in range(n_levels - 1, -1, -1):
         curr_alpha = (lv / delta / 8.0 - 1.0) * exaggeration_factor
         if i == n_levels - 1 or i == 0:
-            level_alphas[i] = 0.0  # skip finest and coarsest
+            # Level 0 (finest): spatial wavelengths too short, amplification
+            # would break the Taylor approximation -> artifacts.
+            # Coarsest level: low-pass residual (DC/mean), not a bandpass
+            # level, amplifying it shifts global brightness.
+            level_alphas[i] = 0.0
         elif curr_alpha > alpha:
             level_alphas[i] = alpha
         else:
