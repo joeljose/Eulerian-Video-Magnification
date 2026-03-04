@@ -10,7 +10,8 @@ __pycache__/
 *.avi
 
 # Input videos
-video.mp4
+*.mp4
+!face.mp4
 
 # Virtual environments
 venv/
