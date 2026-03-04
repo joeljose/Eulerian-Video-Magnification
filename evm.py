@@ -6,9 +6,12 @@ using spatial decomposition, temporal bandpass filtering, and reconstruction.
 
 Based on: Wu et al., "Eulerian Video Magnification for Revealing Subtle
 Changes in the World", SIGGRAPH 2012.
+
+Algorithm follows the reference MATLAB implementation from MIT CSAIL.
 """
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -16,6 +19,15 @@ import time
 import cv2
 import numpy as np
 import scipy.fftpack
+
+# YIQ/NTSC color space conversion matrices (matches MATLAB rgb2ntsc/ntsc2rgb)
+_RGB_TO_YIQ = np.array([
+    [0.299, 0.587, 0.114],
+    [0.596, -0.274, -0.322],
+    [0.211, -0.523, 0.312],
+], dtype=np.float32)
+
+_YIQ_TO_RGB = np.linalg.inv(_RGB_TO_YIQ).astype(np.float32)
 
 
 def format_duration(seconds):
@@ -27,11 +39,21 @@ def format_duration(seconds):
     return f"{minutes}m {secs:.1f}s"
 
 
-def load_video(path):
-    """Load a video file and return (float32 numpy array, fps).
+def rgb_to_yiq(frame):
+    """Convert an RGB float frame to YIQ color space."""
+    return frame @ _RGB_TO_YIQ.T
 
-    The returned array has shape (num_frames, height, width, 3) with
-    values in [0, 1].
+
+def yiq_to_rgb(frame):
+    """Convert a YIQ float frame to RGB color space."""
+    return frame @ _YIQ_TO_RGB.T
+
+
+def load_video(path):
+    """Load a video file and return (YIQ float32 numpy array, fps).
+
+    The returned array has shape (num_frames, height, width, 3) in YIQ
+    color space with Y in [0, 1].
     """
     cap = cv2.VideoCapture(path)
     try:
@@ -51,21 +73,28 @@ def load_video(path):
     finally:
         cap.release()
 
-    # Trim to actual frame count and convert to float
+    # Trim to actual frame count, convert BGR→RGB→float→YIQ
     frames = frames[:i]
-    return frames.astype(np.float32) / 255.0, fps
+    rgb = frames[:, :, :, ::-1].astype(np.float32) / 255.0
+    del frames  # free uint8 buffer
+    yiq = rgb @ _RGB_TO_YIQ.T  # vectorized over all frames at once
+    del rgb
+    return yiq, fps
 
 
-def save_video(video, fps, path):
-    """Save a float [0,1] video array to an AVI file with MJPG codec."""
-    out = np.clip(video * 255, 0, 255).astype(np.uint8)
+def save_video(video_yiq, fps, path):
+    """Save a YIQ float video array to an AVI file with MJPG codec.
+
+    Converts YIQ → RGB → BGR, clips to [0, 1], then writes.
+    """
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    writer = cv2.VideoWriter(
-        path, fourcc, fps, (out.shape[2], out.shape[1]), True
-    )
+    h, w = video_yiq.shape[1], video_yiq.shape[2]
+    writer = cv2.VideoWriter(path, fourcc, fps, (w, h), True)
     try:
-        for i in range(out.shape[0]):
-            writer.write(out[i])
+        for i in range(video_yiq.shape[0]):
+            rgb = yiq_to_rgb(video_yiq[i])
+            bgr = np.clip(rgb[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
+            writer.write(bgr)
     finally:
         writer.release()
     print(f"Output saved to {path}")
@@ -75,7 +104,8 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
     """Decompose every frame into a Laplacian pyramid.
 
     Returns a list of arrays, one per pyramid level. Each array has shape
-    (num_frames, level_height, level_width, 3).
+    (num_frames, level_height, level_width, 3). Level 0 is the finest
+    (full resolution), level N-1 is the coarsest.
     """
     num_frames = video.shape[0]
     vid_pyramid = []
@@ -83,7 +113,7 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
     t_start = time.time()
     for frame_idx in range(num_frames):
         # Build Gaussian pyramid for this frame
-        gauss = [video[frame_idx].copy()]
+        gauss = [video[frame_idx]]
         for _ in range(1, pyramid_levels):
             gauss.append(cv2.pyrDown(gauss[-1]))
 
@@ -104,7 +134,7 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
         for level_idx, level in enumerate(lap):
             vid_pyramid[level_idx][frame_idx] = level
 
-        # Progress reporting every 10% or every 50 frames
+        # Progress reporting every 10%
         if (frame_idx + 1) % max(1, num_frames // 10) == 0:
             elapsed = time.time() - t_start
             pct = (frame_idx + 1) / num_frames
@@ -117,22 +147,26 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
     return vid_pyramid
 
 
-def temporal_bandpass_filter(data, fps, freq_min, freq_max,
-                             amplification_factor):
-    """Apply FFT bandpass filter along the time axis and amplify."""
+def ideal_bandpass_filter(data, fps, freq_low, freq_high):
+    """Apply ideal bandpass filter along the time axis.
+
+    Matches the reference MATLAB implementation (ideal_bandpassing.m):
+    - One-sided frequency mask (positive frequencies only)
+    - Returns real part of IFFT (not absolute value)
+    - No amplification applied (done separately per level)
+    """
+    n = data.shape[0]
+    # Frequency array matching MATLAB: (0:n-1)/n * samplingRate
+    freqs = np.arange(n) / n * fps
+    mask = ((freqs > freq_low) & (freqs < freq_high)).astype(np.float64)
+
+    # Reshape mask for broadcasting: (n, 1, 1, 1) for 4D data
+    mask = mask.reshape([n] + [1] * (data.ndim - 1))
+
     fft = scipy.fftpack.fft(data, axis=0)
-    frequencies = scipy.fftpack.fftfreq(data.shape[0], d=1.0 / fps)
+    fft *= mask  # zero out via multiply (avoids boolean index allocation)
 
-    bound_low = (np.abs(frequencies - freq_min)).argmin()
-    bound_high = (np.abs(frequencies - freq_max)).argmin()
-
-    fft[:bound_low] = 0
-    fft[bound_high:-bound_high] = 0
-    fft[-bound_low:] = 0
-
-    result = np.abs(scipy.fftpack.ifft(fft, axis=0)).astype(np.float32)
-    result *= amplification_factor
-    return result
+    return np.real(scipy.fftpack.ifft(fft, axis=0)).astype(np.float32)
 
 
 def collapse_laplacian_pyramid(image_pyramid):
@@ -152,32 +186,82 @@ def collapse_laplacian_video_pyramid(pyramid):
     return pyramid[0]
 
 
-def eulerian_magnification(video, fps, freq_min, freq_max, amplification,
-                           pyramid_levels=4, skip_levels=1):
+def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
+                           pyramid_levels=4, lambda_c=1000,
+                           chrom_attenuation=1.0):
     """Run the full Eulerian Video Magnification pipeline.
 
+    Follows the reference MATLAB implementation
+    (amplify_spatial_lpyr_temporal_ideal.m):
+
     1. Build Laplacian video pyramid (spatial decomposition)
-    2. Bandpass filter + amplify each pyramid level temporally
-    3. Collapse pyramid to reconstruct magnified video
+    2. Ideal bandpass filter each pyramid level temporally
+    3. Amplify with adaptive per-level alpha based on lambda_c
+    4. Apply chromatic attenuation to I/Q channels
+    5. Add filtered signal back to pyramid and reconstruct
+
+    Args:
+        video: Input video in YIQ color space (num_frames, H, W, 3).
+        fps: Frame rate.
+        freq_min: Lower cutoff frequency (Hz).
+        freq_max: Upper cutoff frequency (Hz).
+        alpha: Amplification factor.
+        pyramid_levels: Number of Laplacian pyramid levels.
+        lambda_c: Cutoff spatial wavelength. Controls which pyramid levels
+            get full vs reduced amplification (per Figure 6 of the paper).
+            Higher values = uniform amplification across all levels.
+        chrom_attenuation: Attenuation factor for I/Q (color) channels.
+            1.0 = full color amplification, 0.0 = luminance only.
     """
     total_start = time.time()
+    height, width = video.shape[1], video.shape[2]
+    n_levels = pyramid_levels
 
     print("Building Laplacian video pyramid...")
     t0 = time.time()
-    vid_pyramid = create_laplacian_video_pyramid(video, pyramid_levels)
+    vid_pyramid = create_laplacian_video_pyramid(video, n_levels)
+    del video  # free original; data is now in pyramid levels
     print(f"  Done in {format_duration(time.time() - t0)}")
 
-    print("Applying temporal bandpass filter...")
+    print("Filtering and amplifying...")
     t0 = time.time()
-    for i in range(len(vid_pyramid)):
-        if i < skip_levels or i >= len(vid_pyramid) - 1:
-            continue
-        bandpassed = temporal_bandpass_filter(
-            vid_pyramid[i], fps,
-            freq_min=freq_min, freq_max=freq_max,
-            amplification_factor=amplification
+
+    # Adaptive per-level amplification (matches MATLAB reference, Figure 6)
+    delta = lambda_c / 8.0 / (1.0 + alpha)
+    exaggeration_factor = 2.0
+
+    # Representative wavelength for the coarsest level
+    lambda_val = math.sqrt(height ** 2 + width ** 2) / 3.0
+
+    # Compute per-level alpha from coarsest to finest
+    level_alphas = [0.0] * n_levels
+    lv = lambda_val
+    for i in range(n_levels - 1, -1, -1):
+        curr_alpha = (lv / delta / 8.0 - 1.0) * exaggeration_factor
+        if i == n_levels - 1 or i == 0:
+            level_alphas[i] = 0.0  # skip finest and coarsest
+        elif curr_alpha > alpha:
+            level_alphas[i] = alpha
+        else:
+            level_alphas[i] = curr_alpha
+        lv /= 2.0
+
+    # Filter, amplify, and add back — one level at a time to limit memory
+    for i in range(n_levels):
+        if level_alphas[i] == 0.0:
+            continue  # skip levels that would be zeroed out (saves FFT)
+
+        filtered = ideal_bandpass_filter(
+            vid_pyramid[i], fps, freq_min, freq_max
         )
-        vid_pyramid[i] += bandpassed
+        # Amplify: full alpha on Y, attenuated on I/Q
+        filtered[:, :, :, 0] *= level_alphas[i]
+        filtered[:, :, :, 1] *= level_alphas[i] * chrom_attenuation
+        filtered[:, :, :, 2] *= level_alphas[i] * chrom_attenuation
+
+        vid_pyramid[i] += filtered
+        del filtered  # free memory immediately
+
     print(f"  Done in {format_duration(time.time() - t0)}")
 
     print("Reconstructing video from pyramid...")
@@ -185,7 +269,8 @@ def eulerian_magnification(video, fps, freq_min, freq_max, amplification,
     result = collapse_laplacian_video_pyramid(vid_pyramid)
     print(f"  Done in {format_duration(time.time() - t0)}")
 
-    print(f"Total processing time: {format_duration(time.time() - total_start)}")
+    print(f"Total processing time: "
+          f"{format_duration(time.time() - total_start)}")
     return result
 
 
@@ -197,10 +282,10 @@ def main():
         epilog=(
             "Examples:\n"
             "  python evm.py -i face.mp4\n"
-            "  python evm.py -i face.mp4 -o magnified.avi -fl 0.5 -fh 2.0 "
-            "-a 15\n"
-            "  python evm.py -i baby.mp4 -fl 0.1 -fh 0.5 -a 30 "
-            "--pyramid-levels 6"
+            "  python evm.py -i face.mp4 -o magnified.avi -a 50 "
+            "-fl 0.83 -fh 1.0\n"
+            "  python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 "
+            "--lambda-c 10 --chrom-attenuation 0"
         )
     )
     parser.add_argument(
@@ -220,16 +305,24 @@ def main():
         help='Upper cutoff frequency in Hz (default: 2.0)'
     )
     parser.add_argument(
-        '-a', '--amplification', type=float, default=15,
-        help='Amplification factor (default: 15)'
+        '-a', '--amplification', type=float, default=50,
+        help='Amplification factor / alpha (default: 50)'
     )
     parser.add_argument(
         '--pyramid-levels', type=int, default=4,
         help='Number of Laplacian pyramid levels (default: 4)'
     )
     parser.add_argument(
-        '--skip-levels', type=int, default=1,
-        help='Number of finest pyramid levels to skip (default: 1)'
+        '--lambda-c', type=float, default=1000,
+        help='Cutoff spatial wavelength for adaptive amplification '
+             '(default: 1000). Lower values reduce amplification at '
+             'finer spatial scales (see paper Figure 6).'
+    )
+    parser.add_argument(
+        '--chrom-attenuation', type=float, default=1.0,
+        help='Attenuation for color (I/Q) channels. '
+             '1.0 = full color amplification, '
+             '0.0 = luminance only (default: 1.0)'
     )
 
     args = parser.parse_args()
@@ -256,12 +349,12 @@ def main():
         print("Error: --pyramid-levels must be at least 2", file=sys.stderr)
         sys.exit(1)
 
-    if args.skip_levels < 0:
-        print("Error: --skip-levels must be non-negative", file=sys.stderr)
+    if args.lambda_c <= 0:
+        print("Error: --lambda-c must be positive", file=sys.stderr)
         sys.exit(1)
 
-    if args.skip_levels >= args.pyramid_levels - 1:
-        print("Error: --skip-levels must be less than pyramid-levels - 1",
+    if not 0.0 <= args.chrom_attenuation <= 1.0:
+        print("Error: --chrom-attenuation must be between 0.0 and 1.0",
               file=sys.stderr)
         sys.exit(1)
 
@@ -285,18 +378,20 @@ def main():
 
     # --- Run ---
     print(f"\nParameters:")
-    print(f"  Frequency band: {args.freq_low}–{args.freq_high} Hz")
-    print(f"  Amplification:  {args.amplification}x")
-    print(f"  Pyramid levels: {args.pyramid_levels}")
-    print(f"  Skip levels:    {args.skip_levels}\n")
+    print(f"  Frequency band:      {args.freq_low}–{args.freq_high} Hz")
+    print(f"  Amplification:       {args.amplification}x")
+    print(f"  Pyramid levels:      {args.pyramid_levels}")
+    print(f"  Lambda_c:            {args.lambda_c}")
+    print(f"  Chrom attenuation:   {args.chrom_attenuation}\n")
 
     result = eulerian_magnification(
         video, fps,
         freq_min=args.freq_low,
         freq_max=args.freq_high,
-        amplification=args.amplification,
+        alpha=args.amplification,
         pyramid_levels=args.pyramid_levels,
-        skip_levels=args.skip_levels
+        lambda_c=args.lambda_c,
+        chrom_attenuation=args.chrom_attenuation,
     )
 
     # --- Save ---

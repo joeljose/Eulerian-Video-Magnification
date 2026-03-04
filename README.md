@@ -20,6 +20,11 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [The Taylor Expansion Argument](#the-taylor-expansion-argument)
   - [Applications](#applications)
   - [Limitations](#limitations)
+- [Implementation](#implementation)
+  - [Color Space](#color-space)
+  - [Temporal Filtering](#temporal-filtering)
+  - [Adaptive Amplification](#adaptive-amplification)
+  - [Optimizations (CLI only)](#optimizations-cli-only)
 - [Setup](#setup)
   - [A. Google Colab](#a-google-colab)
   - [B. Local Setup](#b-local-setup)
@@ -114,6 +119,30 @@ The motion $\delta(t)$ is effectively amplified to $(1 + \alpha)\delta(t)$. This
 
 ---
 
+## Implementation
+
+### Color Space
+
+Video is converted to YIQ (NTSC) color space using the same matrices as MATLAB's `rgb2ntsc`/`ntsc2rgb`. This separates luminance (Y) from chrominance (I, Q), enabling independent control of color amplification via the `--chrom-attenuation` flag.
+
+### Temporal Filtering
+
+Ideal bandpass filtering via FFT, matching MATLAB's `ideal_bandpassing.m`. Uses a one-sided frequency mask (positive frequencies only) and takes `real(ifft(...))` — the real part, not the absolute value. This preserves the sign of the filtered signal so pixels oscillate above and below their mean, correctly representing the temporal variation.
+
+### Adaptive Amplification
+
+Per-level alpha is computed based on `lambda_c` and the representative spatial wavelength at each pyramid level (Figure 6 of the paper). This prevents over-amplification of fine spatial details beyond what the first-order Taylor expansion supports. The finest (level 0 = full resolution) and coarsest pyramid levels are zeroed out.
+
+### Optimizations (CLI only)
+
+- Skip FFT on zeroed levels (level 0 and coarsest)
+- Free intermediate arrays immediately after use
+- Vectorized YIQ conversion
+- Progress reporting with ETA
+- Nyquist frequency validation
+
+---
+
 ## Setup
 
 ### A. Google Colab
@@ -160,9 +189,9 @@ docker run --rm -it \
 ### CLI Tool
 
 ```bash
-python evm.py -i input.mp4                          # defaults
-python evm.py -i input.mp4 -o out.avi -fl 0.5 -fh 2.0 -a 15
-python evm.py -i baby.mp4 -fl 0.1 -fh 0.5 -a 30 --pyramid-levels 6
+python evm.py -i face.mp4
+python evm.py -i face.mp4 -o magnified.avi -a 50 -fl 0.83 -fh 1.0
+python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuation 0
 ```
 
 | Flag | Default | Description |
@@ -171,9 +200,10 @@ python evm.py -i baby.mp4 -fl 0.1 -fh 0.5 -a 30 --pyramid-levels 6
 | `-o / --output` | `<input>_magnified.avi` | Output video path |
 | `-fl / --freq-low` | 0.5 | Lower cutoff frequency (Hz) |
 | `-fh / --freq-high` | 2.0 | Upper cutoff frequency (Hz) |
-| `-a / --amplification` | 15 | Amplification factor |
+| `-a / --amplification` | 50 | Amplification factor (alpha) |
 | `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
-| `--skip-levels` | 1 | Finest pyramid levels to skip |
+| `--lambda-c` | 1000 | Cutoff spatial wavelength (see paper Figure 6) |
+| `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 
 ### Notebook
 
