@@ -4,7 +4,7 @@
 
 Eulerian video magnification reveals temporal variations in videos that are difficult or impossible to see with the naked eye. It can amplify subtle color changes — like the flush of blood under skin with each heartbeat — or tiny motions, making them clearly visible.
 
-![original](https://github.com/joeljose/assets/blob/master/EVM/a00.gif?raw=True)![20X](https://github.com/joeljose/assets/blob/master/EVM/a20.gif?raw=True)![100X](https://github.com/joeljose/assets/blob/master/EVM/a100.gif?raw=True)
+![original](.github/images/a00.gif)![20X](.github/images/a20.gif)![100X](.github/images/a100.gif)
 
 **Figure 1: Original video, 20X magnified, and 100X magnified.**
 
@@ -50,7 +50,7 @@ The key insight is that for small motions, the temporal intensity change at a fi
 
 ### Algorithm Pipeline
 
-![](https://github.com/joeljose/assets/blob/master/EVM/EVM_flow.png?raw=True)
+![](.github/images/EVM_flow.png)
 
 The algorithm has four main stages:
 
@@ -231,8 +231,8 @@ Open the notebook and run all cells. By default, it downloads a sample face vide
 ---
 
 ## Follow Me
-<a href="https://twitter.com/joelk1jose" target="_blank"><img class="ai-subscribed-social-icon" src="https://github.com/joeljose/assets/blob/master/images/tw.png" width="30"></a>
-<a href="https://github.com/joeljose" target="_blank"><img class="ai-subscribed-social-icon" src="https://github.com/joeljose/assets/blob/master/images/gthb.png" width="30"></a>
-<a href="https://www.linkedin.com/in/joel-jose-527b80102/" target="_blank"><img class="ai-subscribed-social-icon" src="https://github.com/joeljose/assets/blob/master/images/lnkdn.png" width="30"></a>
+<a href="https://twitter.com/joelk1jose" target="_blank"><img class="ai-subscribed-social-icon" src=".github/images/tw.png" width="30"></a>
+<a href="https://github.com/joeljose" target="_blank"><img class="ai-subscribed-social-icon" src=".github/images/gthb.png" width="30"></a>
+<a href="https://www.linkedin.com/in/joel-jose-527b80102/" target="_blank"><img class="ai-subscribed-social-icon" src=".github/images/lnkdn.png" width="30"></a>
 
 <h3 align="center">Show your support by starring the repository 🙂</h3>
