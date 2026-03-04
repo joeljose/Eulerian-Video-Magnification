@@ -7,7 +7,14 @@ __pycache__/
 *.egg-info/
 
 # Output videos
-*_magnified*.avi
+*.avi
+
+# Input videos
+video.mp4
+
+# Virtual environments
+venv/
+.venv/
 
 # OS
 .DS_Store
