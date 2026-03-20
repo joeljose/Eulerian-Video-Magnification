@@ -29,8 +29,10 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [A. Google Colab](#a-google-colab)
   - [B. Local Setup](#b-local-setup)
   - [C. Docker](#c-docker)
+  - [D. GPU (CUDA)](#d-gpu-cuda)
 - [Usage](#usage)
   - [CLI Tool](#cli-tool)
+  - [GPU CLI Tool](#gpu-cli-tool)
   - [Notebook](#notebook)
   - [Tips](#tips)
 - [References](#references)
@@ -175,15 +177,61 @@ jupyter notebook Eulerian_Video_Magnification.ipynb
 ### C. Docker
 
 ```bash
-# Build
+# Build (tags as evm:<version> and evm:latest)
 ./docker-build.sh
 
 # Run
 docker run --rm -it \
     -v "$(pwd)":/app/data \
-    eulerian-video-magnification \
+    evm \
     -i /app/data/input.mp4 -o /app/data/output.avi
 ```
+
+### D. GPU (CUDA)
+
+For faster processing on NVIDIA GPUs.
+
+**Prerequisites:**
+- NVIDIA GPU with CUDA support (CUDA 12.x+)
+- [NVIDIA drivers](https://www.nvidia.com/Download/index.aspx) installed on the host
+- [Docker](https://docs.docker.com/get-docker/)
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) — allows Docker to access the GPU
+
+**Verify your GPU is accessible:**
+```bash
+nvidia-smi  # Should show your GPU name, driver version, and CUDA version
+```
+
+**Build the CUDA Docker image:**
+```bash
+./docker-build-cuda.sh
+```
+
+**Run on your video:**
+```bash
+# Basic usage — magnify face.mp4 with default settings
+docker run --gpus all --rm \
+    -v "$(pwd)":/data \
+    evm-cuda \
+    -i /data/face.mp4 -o /data/face_magnified.avi
+
+# Pulse detection (0.83–1.0 Hz, 50x amplification)
+docker run --gpus all --rm \
+    -v "$(pwd)":/data \
+    evm-cuda \
+    -i /data/face.mp4 -o /data/face_magnified.avi \
+    -fl 0.83 -fh 1.0 -a 50
+
+# Select a specific GPU (for multi-GPU systems)
+docker run --gpus all --rm \
+    -v "$(pwd)":/data \
+    evm-cuda \
+    -i /data/input.mp4 -o /data/output.avi --device 1
+```
+
+The GPU version runs the entire EVM pipeline on GPU using CuPy (backed by cuFFT). It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
+
+**VRAM requirements:** Depends on video resolution and length. The tool prints exact requirements before starting. As a rough guide: a 300-frame 264x296 video needs ~0.5 GB, a 1080p 30s video at 30fps needs ~4-5 GB.
 
 ---
 
@@ -208,6 +256,22 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--lambda-c` | 1000 | Cutoff spatial wavelength (see paper Figure 6) |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 | `--version` | — | Show program version and exit |
+
+### GPU CLI Tool
+
+Same flags as the CPU version, plus `--device`. The recommended way to run is via Docker (see [GPU setup](#d-gpu-cuda) above). If running outside Docker:
+
+```bash
+pip install -r requirements-cuda.txt
+python evm_cuda.py -i face.mp4
+python evm_cuda.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --device 0
+```
+
+| Additional Flag | Default | Description |
+|---|---|---|
+| `--device` | 0 | CUDA device ID (for multi-GPU systems) |
+
+The tool prints the GPU name, estimated VRAM usage, and available memory before processing.
 
 ### Notebook
 

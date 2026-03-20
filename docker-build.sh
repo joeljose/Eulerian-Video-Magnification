@@ -1,10 +1,13 @@
 #!/bin/bash
 set -e
 
+VERSION=$(grep -oP '__version__ = "\K[^"]+' evm.py)
+
 docker build \
     --build-arg UID="$(id -u)" \
     --build-arg GID="$(id -g)" \
     --build-arg UNAME="$(whoami)" \
-    -t eulerian-video-magnification .
+    -t evm:${VERSION} \
+    -t evm:latest .
 
-echo "Built eulerian-video-magnification image as user: $(whoami) (uid=$(id -u), gid=$(id -g))"
+echo "Built evm:${VERSION} (also tagged :latest)"
