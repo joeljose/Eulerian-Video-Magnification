@@ -1,0 +1,24 @@
+FROM nvidia/cuda:12.6.3-base-ubuntu22.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 python3-pip libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+ARG UID
+ARG GID
+ARG UNAME
+
+RUN groupadd -g ${GID} ${UNAME} && \
+    useradd -m -u ${UID} -g ${GID} ${UNAME}
+
+WORKDIR /app
+
+COPY requirements-cuda.txt .
+RUN pip install --no-cache-dir -r requirements-cuda.txt
+
+COPY evm_cuda.py .
+
+USER ${UNAME}
+
+ENTRYPOINT ["python3", "-u", "evm_cuda.py"]
