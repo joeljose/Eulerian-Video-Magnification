@@ -10,29 +10,34 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11.15"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg UID=$(id -u) \
+            --build-arg GID=$(id -g) \
+            --build-arg UNAME=$(whoami) \
+            -t evm-ci .
 
       - name: Lint
-        run: pip install ruff && ruff check .
+        run: docker run --rm -u root --entrypoint "" evm-ci sh -c "pip install ruff && ruff check ."
 
       - name: Verify import
-        run: python -c "import evm"
+        run: docker run --rm --entrypoint "" evm-ci python -c "import evm"
 
       - name: Verify --help
-        run: python evm.py --help
+        run: docker run --rm --entrypoint "" evm-ci python evm.py --help
 
       - name: Verify --version
-        run: python evm.py --version
+        run: docker run --rm --entrypoint "" evm-ci python evm.py --version
 
       - name: Run full pipeline on face.mp4
-        run: python evm.py -i face.mp4 -o face_magnified.avi -fl 0.83 -fh 1.0 -a 50
+        run: |
+          docker run --rm --entrypoint "" \
+            -v "${{ github.workspace }}:/data" \
+            evm-ci \
+            python -u evm.py -i /data/face.mp4 -o /data/face_magnified.avi -fl 0.83 -fh 1.0 -a 50
 
       - name: Verify output exists
         run: test -f face_magnified.avi
