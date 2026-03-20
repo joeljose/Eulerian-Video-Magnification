@@ -62,7 +62,7 @@ def load_video(path):
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        fps = cap.get(cv2.CAP_PROP_FPS)
 
         frames = np.zeros((frame_count, height, width, 3), dtype=np.uint8)
         i = 0
@@ -122,7 +122,7 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
         # Build Laplacian pyramid from Gaussian
         lap = []
         for i in range(pyramid_levels - 1):
-            lap.append(gauss[i] - cv2.pyrUp(gauss[i + 1]))
+            lap.append(gauss[i] - cv2.pyrUp(gauss[i + 1], dstsize=(gauss[i].shape[1], gauss[i].shape[0])))
         lap.append(gauss[-1])  # coarsest level
 
         # Allocate pyramid storage on first frame
@@ -175,7 +175,7 @@ def collapse_laplacian_pyramid(image_pyramid):
     """Reconstruct an image from its Laplacian pyramid levels."""
     img = image_pyramid[-1]
     for i in range(len(image_pyramid) - 2, -1, -1):
-        img = cv2.pyrUp(img) + image_pyramid[i]
+        img = cv2.pyrUp(img, dstsize=(image_pyramid[i].shape[1], image_pyramid[i].shape[0])) + image_pyramid[i]
     return img
 
 
