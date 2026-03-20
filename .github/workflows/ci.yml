@@ -41,3 +41,28 @@ jobs:
 
       - name: Verify output exists
         run: test -f face_magnified.avi
+
+  test-cuda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build CUDA Docker image
+        run: |
+          docker build -f Dockerfile.cuda \
+            --build-arg UID=$(id -u) \
+            --build-arg GID=$(id -g) \
+            --build-arg UNAME=$(whoami) \
+            -t evm-cuda-ci .
+
+      - name: Lint
+        run: docker run --rm -u root --entrypoint "" evm-cuda-ci sh -c "pip install ruff && ruff check ."
+
+      - name: Verify import
+        run: docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm_cuda"
+
+      - name: Verify --help
+        run: docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --help
+
+      - name: Verify --version
+        run: docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --version

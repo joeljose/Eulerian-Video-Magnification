@@ -29,8 +29,10 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [A. Google Colab](#a-google-colab)
   - [B. Local Setup](#b-local-setup)
   - [C. Docker](#c-docker)
+  - [D. GPU (CUDA)](#d-gpu-cuda)
 - [Usage](#usage)
   - [CLI Tool](#cli-tool)
+  - [GPU CLI Tool](#gpu-cli-tool)
   - [Notebook](#notebook)
   - [Tips](#tips)
 - [References](#references)
@@ -185,6 +187,27 @@ docker run --rm -it \
     -i /app/data/input.mp4 -o /app/data/output.avi
 ```
 
+### D. GPU (CUDA)
+
+For faster processing on NVIDIA GPUs. Requires:
+- NVIDIA GPU with CUDA support
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (nvidia-docker)
+
+```bash
+# Build
+./docker-build-cuda.sh
+
+# Run
+docker run --gpus all --rm \
+    -v "$(pwd)":/data \
+    evm-cuda \
+    -i /data/input.mp4 -o /data/output.avi
+```
+
+The GPU version uses CuPy (backed by cuFFT) and runs the entire pipeline on GPU. It automatically checks available VRAM before processing and will exit with a clear error if the video is too large for your GPU.
+
+**VRAM requirements:** Depends on video resolution and length. A 300-frame 264x296 video needs ~0.3 GB. A 1080p 30-second video at 30fps needs ~8-10 GB. The tool will tell you exactly how much is needed before starting.
+
 ---
 
 ## Usage
@@ -208,6 +231,21 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--lambda-c` | 1000 | Cutoff spatial wavelength (see paper Figure 6) |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 | `--version` | — | Show program version and exit |
+
+### GPU CLI Tool
+
+Same flags as the CPU version, plus `--device` to select a specific GPU:
+
+```bash
+python evm_cuda.py -i face.mp4
+python evm_cuda.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --device 0
+```
+
+| Additional Flag | Default | Description |
+|---|---|---|
+| `--device` | 0 | CUDA device ID (for multi-GPU systems) |
+
+The tool prints the GPU name, estimated VRAM usage, and available memory before processing.
 
 ### Notebook
 
