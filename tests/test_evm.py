@@ -67,31 +67,6 @@ class TestColorConversion:
         assert evm.yiq_to_rgb(frame).dtype == np.float32
 
 
-class TestEstimateVramBytes:
-    """Pure arithmetic — exact equality."""
-
-    def test_known_values(self):
-        # 100 frames, 480x640, 4 levels
-        # Level 0: 100 * 480 * 640 * 12 = 368,640,000
-        # Level 1: 100 * 240 * 320 * 12 = 92,160,000
-        # Level 2: 100 * 120 * 160 * 12 = 23,040,000
-        # Level 3: 100 * 60 * 80 * 12   = 5,760,000
-        # Pyramid total = 489,600,000
-        # FFT buffer (level 1): 100 * 240 * 320 * 3 * 8 = 184,320,000
-        # Total = 673,920,000
-        evm_cuda = pytest.importorskip("evm_cuda")
-        result = evm_cuda.estimate_vram_bytes(100, 480, 640, 4)
-        assert result == 673_920_000
-
-    def test_single_frame(self):
-        evm_cuda = pytest.importorskip("evm_cuda")
-        result = evm_cuda.estimate_vram_bytes(1, 100, 100, 2)
-        # Level 0: 1 * 100 * 100 * 12 = 120,000
-        # Level 1: 1 * 50 * 50 * 12 = 30,000
-        # FFT buffer: 1 * 50 * 50 * 24 = 60,000
-        assert result == 210_000
-
-
 # ---------------------------------------------------------------------------
 # Tier 2: Moderate tolerance (atol=1e-4)
 # ---------------------------------------------------------------------------

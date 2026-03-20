@@ -18,6 +18,9 @@ COPY requirements-cuda.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-cuda.txt -r requirements-dev.txt
 
 COPY evm_cuda.py .
+COPY tests/ tests/
+
+RUN chown -R ${UID}:${GID} /app
 
 ARG VERSION
 LABEL version=${VERSION}
