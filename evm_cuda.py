@@ -8,7 +8,7 @@ Based on: Wu et al., "Eulerian Video Magnification for Revealing Subtle
 Changes in the World", SIGGRAPH 2012.
 """
 
-__version__ = "2.0.0-cuda"
+__version__ = "2.1.0-cuda"
 
 import argparse
 import math
