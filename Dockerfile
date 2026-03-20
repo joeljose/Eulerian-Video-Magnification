@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY evm.py .
 
+ARG VERSION
+LABEL version=${VERSION}
+
 USER ${UNAME}
 
 ENTRYPOINT ["python", "-u", "evm.py"]
