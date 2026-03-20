@@ -387,7 +387,7 @@ def main():
               f"fps). Results may be unreliable.", file=sys.stderr)
 
     # --- Run ---
-    print(f"\nParameters:")
+    print("\nParameters:")
     print(f"  Frequency band:      {args.freq_low}–{args.freq_high} Hz")
     print(f"  Amplification:       {args.amplification}x")
     print(f"  Pyramid levels:      {args.pyramid_levels}")
