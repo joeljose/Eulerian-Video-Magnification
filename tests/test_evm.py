@@ -1,5 +1,6 @@
 """Unit tests for evm.py — CPU Eulerian Video Magnification."""
 
+import subprocess
 import sys
 import os
 from unittest.mock import MagicMock, patch
@@ -240,3 +241,77 @@ class TestLoadVideoBufferGuard:
         # Should have exactly reported_count frames, not actual_frames
         assert video.shape[0] == reported_count
         assert fps == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests
+# ---------------------------------------------------------------------------
+
+# Path to evm.py from project root
+EVM_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "evm.py")
+
+
+def run_evm(*args):
+    """Run evm.py with given args and return (returncode, stderr)."""
+    result = subprocess.run(
+        [sys.executable, EVM_SCRIPT] + list(args),
+        capture_output=True, text=True
+    )
+    return result.returncode, result.stderr
+
+
+@pytest.fixture
+def dummy_video(tmp_path):
+    """Create a tiny valid file to pass the file-exists check."""
+    p = tmp_path / "dummy.mp4"
+    p.write_bytes(b"\x00" * 100)
+    return str(p)
+
+
+class TestInputValidation:
+    """Test that invalid arguments are rejected with exit code 1."""
+
+    def test_nonexistent_input_file(self):
+        code, stderr = run_evm("-i", "nonexistent_file.mp4")
+        assert code == 1
+        assert "not found" in stderr
+
+    def test_freq_low_zero(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "-fl", "0")
+        assert code == 1
+        assert "--freq-low must be positive" in stderr
+
+    def test_freq_low_negative(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "-fl", "-1")
+        assert code == 1
+        assert "--freq-low must be positive" in stderr
+
+    def test_freq_high_less_than_freq_low(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "-fl", "5", "-fh", "2")
+        assert code == 1
+        assert "--freq-high must be greater" in stderr
+
+    def test_amplification_zero(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "-a", "0")
+        assert code == 1
+        assert "--amplification must be positive" in stderr
+
+    def test_pyramid_levels_one(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "--pyramid-levels", "1")
+        assert code == 1
+        assert "--pyramid-levels must be at least 2" in stderr
+
+    def test_lambda_c_zero(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "--lambda-c", "0")
+        assert code == 1
+        assert "--lambda-c must be positive" in stderr
+
+    def test_chrom_attenuation_above_one(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "--chrom-attenuation", "1.5")
+        assert code == 1
+        assert "--chrom-attenuation must be between" in stderr
+
+    def test_chrom_attenuation_negative(self, dummy_video):
+        code, stderr = run_evm("-i", dummy_video, "--chrom-attenuation", "-0.1")
+        assert code == 1
+        assert "--chrom-attenuation must be between" in stderr
