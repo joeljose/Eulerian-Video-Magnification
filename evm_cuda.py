@@ -457,7 +457,7 @@ def main():
 
     # --- Load and transfer to GPU ---
     video, fps = load_video(args.input)
-    print(f"  Loaded and transferred to GPU")
+    print("  Loaded and transferred to GPU")
 
     # --- Nyquist warning ---
     nyquist = fps / 2.0
