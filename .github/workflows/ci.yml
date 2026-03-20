@@ -21,10 +21,10 @@ jobs:
             -t evm-ci .
 
       - name: Lint
-        run: docker run --rm -u root --entrypoint "" evm-ci sh -c "pip install ruff && ruff check ."
+        run: docker run --rm --entrypoint "" evm-ci ruff check .
 
       - name: Run tests
-        run: docker run --rm -u root --entrypoint "" evm-ci sh -c "pip install pytest && python -m pytest tests/ -v"
+        run: docker run --rm --entrypoint "" evm-ci python -m pytest tests/ -v
 
       - name: Verify import
         run: docker run --rm --entrypoint "" evm-ci python -c "import evm"
@@ -59,7 +59,7 @@ jobs:
             -t evm-cuda-ci .
 
       - name: Lint
-        run: docker run --rm -u root --entrypoint "" evm-cuda-ci sh -c "pip install ruff && ruff check ."
+        run: docker run --rm --entrypoint "" evm-cuda-ci ruff check .
 
       - name: Verify import
         run: docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm_cuda"

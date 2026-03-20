@@ -14,8 +14,8 @@ RUN groupadd -g ${GID} ${UNAME} && \
 
 WORKDIR /app
 
-COPY requirements-cuda.txt .
-RUN pip install --no-cache-dir -r requirements-cuda.txt
+COPY requirements-cuda.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-cuda.txt -r requirements-dev.txt
 
 COPY evm_cuda.py .
 
