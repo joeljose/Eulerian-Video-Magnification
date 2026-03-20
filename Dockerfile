@@ -17,6 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY evm.py .
+COPY tests/ tests/
 
 ARG VERSION
 LABEL version=${VERSION}

@@ -23,6 +23,9 @@ jobs:
       - name: Lint
         run: docker run --rm -u root --entrypoint "" evm-ci sh -c "pip install ruff && ruff check ."
 
+      - name: Run tests
+        run: docker run --rm -u root --entrypoint "" evm-ci sh -c "pip install pytest && python -m pytest tests/ -v"
+
       - name: Verify import
         run: docker run --rm --entrypoint "" evm-ci python -c "import evm"
 
