@@ -23,13 +23,25 @@ import cupyx.scipy.ndimage
 import numpy as np
 
 # YIQ/NTSC color space conversion matrices (matches MATLAB rgb2ntsc/ntsc2rgb)
-_RGB_TO_YIQ = cp.array([
+# Stored as numpy at module level; converted to CuPy on first use to avoid
+# GPU allocation at import time (allows import without a GPU for CI checks).
+_RGB_TO_YIQ_NP = np.array([
     [0.299, 0.587, 0.114],
     [0.596, -0.274, -0.322],
     [0.211, -0.523, 0.312],
-], dtype=cp.float32)
+], dtype=np.float32)
 
-_YIQ_TO_RGB = cp.linalg.inv(_RGB_TO_YIQ).astype(cp.float32)
+_YIQ_TO_RGB_NP = np.linalg.inv(_RGB_TO_YIQ_NP).astype(np.float32)
+
+_RGB_TO_YIQ = None
+_YIQ_TO_RGB = None
+
+
+def _init_gpu_matrices():
+    """Transfer color conversion matrices to GPU (called once at startup)."""
+    global _RGB_TO_YIQ, _YIQ_TO_RGB
+    _RGB_TO_YIQ = cp.asarray(_RGB_TO_YIQ_NP)
+    _YIQ_TO_RGB = cp.asarray(_YIQ_TO_RGB_NP)
 
 
 def format_duration(seconds):
@@ -292,10 +304,11 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
 def estimate_vram_bytes(num_frames, height, width, pyramid_levels):
     """Estimate peak GPU memory usage in bytes.
 
-    Accounts for: video array, pyramid levels, FFT buffers.
+    Peak occurs during FFT filtering: all pyramid levels are allocated,
+    plus one FFT buffer for the largest level being filtered. The input
+    video is freed before filtering starts.
     """
     bytes_per_pixel = 3 * 4  # 3 channels × float32
-    video_bytes = num_frames * height * width * bytes_per_pixel
 
     # Pyramid levels: each level is ~1/4 the previous
     pyramid_bytes = 0
@@ -305,10 +318,12 @@ def estimate_vram_bytes(num_frames, height, width, pyramid_levels):
         h = h // 2
         w = w // 2
 
-    # FFT buffer: same size as one pyramid level (largest = level 0)
-    fft_buffer = num_frames * height * width * 3 * 16  # complex128
+    # FFT buffer: complex64 for float32 input, on the largest filtered level
+    # (level 1, which is half resolution — level 0 is skipped)
+    fft_h, fft_w = height // 2, width // 2
+    fft_buffer = num_frames * fft_h * fft_w * 3 * 8  # complex64
 
-    return video_bytes + pyramid_bytes + fft_buffer
+    return pyramid_bytes + fft_buffer
 
 
 def check_vram(num_frames, height, width, pyramid_levels, device_id):
@@ -434,7 +449,11 @@ def main():
         sys.exit(1)
 
     device_name = cp.cuda.runtime.getDeviceProperties(args.device)['name']
+    if isinstance(device_name, bytes):
+        device_name = device_name.decode('utf-8')
     print(f"Using GPU: {device_name} (device {args.device})")
+
+    _init_gpu_matrices()
 
     # --- Default output path ---
     if args.output is None:
