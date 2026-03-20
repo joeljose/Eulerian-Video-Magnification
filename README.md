@@ -35,6 +35,10 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [GPU CLI Tool](#gpu-cli-tool)
   - [Notebook](#notebook)
   - [Tips](#tips)
+- [Development](#development)
+  - [Running Tests](#running-tests)
+  - [Versioning](#versioning)
+  - [Project Structure](#project-structure)
 - [References](#references)
 
 ---
@@ -283,6 +287,83 @@ Open the notebook and run all cells. By default, it downloads a sample face vide
 - Start with low amplification and increase gradually.
 - For pulse/color magnification: 0.5–2 Hz, high amplification (50+).
 - For motion magnification: match the frequency band to the motion you want to reveal.
+
+---
+
+## Development
+
+### Running Tests
+
+All tests run inside Docker — no local Python dependencies needed. Build the test image once, then run tests as many times as you need:
+
+```bash
+# Build the CPU test image (first time, or after Dockerfile/dependency changes)
+./docker-build.sh
+
+# Run CPU unit tests (builds image automatically if not found)
+./test.sh
+
+# Run GPU unit tests (requires NVIDIA GPU + Container Toolkit)
+./test.sh gpu
+
+# Force rebuild before testing
+./test.sh --build
+```
+
+**CPU tests** (`tests/test_evm.py`) cover:
+- Color conversion roundtrip (YIQ ↔ RGB)
+- Bandpass filter (passband, rejection, DC)
+- Laplacian pyramid (reconstruction roundtrip, shapes, finite values)
+- `load_video` buffer safety
+- All CLI input validation error paths
+
+**GPU tests** (`tests/test_evm_cuda.py`) cover:
+- VRAM estimation
+- GPU color conversion roundtrip
+- GPU pyramid operations (pyrDown/pyrUp shapes, finite values)
+- GPU bandpass filter
+
+**Dev workflow:**
+1. Make your changes
+2. Run `./test.sh` (or `./test.sh gpu` for CUDA changes)
+3. If all tests pass, commit and open a PR
+4. CI runs lint + smoke tests automatically
+
+### Versioning
+
+Version is tracked in a `VERSION` file at the project root. Both `evm.py` and `evm_cuda.py` have `__version__` baked into the source (updated at release time).
+
+**To cut a release:**
+1. Update `VERSION` with the new version number
+2. Update `__version__` in `evm.py` (e.g., `"2.1.0"`) and `evm_cuda.py` (e.g., `"2.1.0-cuda"`)
+3. Update `CHANGELOG.md` — move items from `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`
+4. Commit: `Release vX.Y.Z`
+5. Tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+6. Push: `git push && git push origin vX.Y.Z`
+7. Rebuild Docker images: `./docker-build.sh` and `./docker-build-cuda.sh`
+
+Docker build scripts read from `VERSION` and tag images accordingly (e.g., `evm:2.1.0`, `evm-cuda:2.1.0-cuda`). Images also carry a `version` label visible via `docker inspect`.
+
+### Project Structure
+
+```
+evm.py                  # CPU CLI tool
+evm_cuda.py             # GPU CLI tool (CuPy/CUDA)
+Dockerfile              # CPU Docker image
+Dockerfile.cuda         # GPU Docker image
+docker-build.sh         # Build + tag CPU image
+docker-build-cuda.sh    # Build + tag GPU image
+test.sh                 # Run unit tests (cpu/gpu)
+requirements.txt        # CPU runtime dependencies
+requirements-cuda.txt   # GPU runtime dependencies
+requirements-dev.txt    # Dev dependencies (pytest, ruff)
+tests/
+  test_evm.py           # CPU unit tests
+  test_evm_cuda.py      # GPU unit tests
+docs/design/            # Architecture decision records
+VERSION                 # Single source of truth for version
+CHANGELOG.md            # Release history
+```
 
 ---
 
