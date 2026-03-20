@@ -13,10 +13,16 @@ RUN groupadd -g ${GID} ${UNAME} && \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
 
 COPY evm.py .
+COPY tests/ tests/
+
+RUN chown -R ${UID}:${GID} /app
+
+ARG VERSION
+LABEL version=${VERSION}
 
 USER ${UNAME}
 

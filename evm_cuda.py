@@ -70,6 +70,8 @@ def load_video(path):
         frames = np.zeros((frame_count, height, width, 3), dtype=np.uint8)
         i = 0
         while cap.isOpened():
+            if i >= frame_count:
+                break
             ret, frame = cap.read()
             if not ret:
                 break
