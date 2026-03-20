@@ -2,6 +2,7 @@
 
 import sys
 import os
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -198,3 +199,44 @@ class TestLaplacianPyramid:
         pyramid = evm.create_laplacian_video_pyramid(video, 2)
         for level in pyramid:
             assert level.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: load_video buffer guard
+# ---------------------------------------------------------------------------
+
+class TestLoadVideoBufferGuard:
+    """Verify load_video doesn't crash when CAP_PROP_FRAME_COUNT is wrong."""
+
+    def test_frame_count_too_low(self):
+        """If reported frame_count < actual frames, should cap at reported count."""
+        actual_frames = 10
+        reported_count = 5
+        h, w = 8, 8
+        fake_frames = [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(actual_frames)]
+        call_idx = [0]
+
+        mock_cap = MagicMock()
+        mock_cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FRAME_COUNT: reported_count,
+            cv2.CAP_PROP_FRAME_WIDTH: w,
+            cv2.CAP_PROP_FRAME_HEIGHT: h,
+            cv2.CAP_PROP_FPS: 30.0,
+        }[prop]
+        mock_cap.isOpened.return_value = True
+
+        def mock_read():
+            if call_idx[0] < actual_frames:
+                frame = fake_frames[call_idx[0]]
+                call_idx[0] += 1
+                return True, frame
+            return False, None
+
+        mock_cap.read.side_effect = mock_read
+
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            video, fps = evm.load_video("fake_path.mp4")
+
+        # Should have exactly reported_count frames, not actual_frames
+        assert video.shape[0] == reported_count
+        assert fps == 30.0
