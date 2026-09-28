@@ -133,11 +133,13 @@ Video is converted to YIQ (NTSC) color space using the same matrices as MATLAB's
 
 ### Temporal Filtering
 
-Ideal bandpass filtering via FFT, matching MATLAB's `ideal_bandpassing.m`. Uses a one-sided frequency mask (positive frequencies only) and takes `real(ifft(...))` — the real part, not the absolute value. This preserves the sign of the filtered signal so pixels oscillate above and below their mean, correctly representing the temporal variation.
+Ideal bandpass filtering via FFT, following MATLAB's `ideal_bandpassing.m`: the filtered signal keeps its sign, so pixels oscillate above and below their mean. Like the reference, the output is half the in-band signal (the reference keeps positive frequencies only); see issue #28.
+
+Before the FFT the clip is extended with its time-reversed copy. The FFT treats a clip as a loop, so without this the last frame is joined to the first, and slow drift over the clip (lighting, auto-exposure) turns into amplified flicker. The band must contain at least one FFT bin; a band narrower than the clip's resolution (`fps / frames`) gives a warning, and a band above the Nyquist frequency (`fps / 2`) is an error.
 
 ### Adaptive Amplification
 
-Per-level alpha is computed based on `lambda_c` and the representative spatial wavelength at each pyramid level (Figure 6 of the paper). This prevents over-amplification of fine spatial details beyond what the first-order Taylor expansion supports. Two levels are zeroed out:
+Per-level alpha is computed based on `lambda_c` and the representative spatial wavelength at each pyramid level (Figure 6 of the paper). This prevents over-amplification of fine spatial details beyond what the first-order Taylor expansion supports. Per-level alpha is never negative (the reference formula goes negative for small frames, which would shrink the motion). Two levels are zeroed out:
 
 - **Level 0 (finest, full resolution)** — captures the highest spatial frequencies (sharpest edges and fine details). The spatial wavelengths are so short that even modest amplification breaks the first-order Taylor approximation, producing ringing and ghosting artifacts.
 - **Coarsest level (low-pass residual)** — this is not a true bandpass level; it is the Gaussian remainder (`gauss[-1]`) appended directly to the pyramid. It contains the DC component (overall mean intensity), so amplifying it would shift global brightness rather than reveal temporal variations.
@@ -149,6 +151,7 @@ Per-level alpha is computed based on `lambda_c` and the representative spatial w
 - Vectorized YIQ conversion
 - Progress reporting with ETA
 - Nyquist frequency validation
+- Synthetic validation against exact ground truth (see [below](#synthetic-validation))
 
 ---
 
@@ -259,6 +262,7 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
 | `--lambda-c` | 1000 | Cutoff spatial wavelength in pixels (paper Figure 6). Structures smaller than this get reduced amplification, so **lower = stronger amplification**. The effective per-level gains are printed at startup. |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
+| `--fps` | *(from video)* | Frame rate of the input, for files that don't report one |
 | `--version` | — | Show program version and exit |
 
 ### GPU CLI Tool
@@ -286,7 +290,21 @@ Open the notebook and run all cells. By default, it downloads a sample face vide
 - Use `show_frequencies()` in the notebook to visualize frequency content before choosing cutoff frequencies.
 - Start with low amplification and increase gradually.
 - For pulse/color magnification: 0.5–2 Hz, high amplification (50+).
-- For motion magnification: match the frequency band to the motion you want to reveal.
+- For motion magnification: match the frequency band to the motion you want to reveal, and keep the magnified motion under about 1 px (see below).
+
+### Synthetic validation
+
+`scripts/synthetic_shapes.py` renders circles, squares and rings whose size pulses by an exact sub-pixel amount, magnifies them, and measures the result against the ideal. Run it with `python scripts/synthetic_shapes.py`; `tests/test_synthetic_shapes.py` keeps the key results as tests. Findings, with `-a 10`, band 0.5–3 Hz, `--lambda-c 10`, 4 levels, on 128×128 frames:
+
+| Check | Result |
+|---|---|
+| Motion inside the band | about **0.38×** the requested gain on a thin ring, 0.28× on a filled circle: the filter halves it, and the finest and coarsest levels are not amplified (issue #28) |
+| Motion outside the band | unchanged (1.0×) |
+| Phase lag | none |
+| Circles vs squares | same gain in every direction (about 3% spread) |
+| Large motion | quality drops quickly once the magnified motion passes about 1 px; ghost edges dominate from 2 px |
+
+The detailed numbers are in [docs/research/synthetic-validation.md](docs/research/synthetic-validation.md).
 
 ---
 
@@ -366,6 +384,9 @@ tests/
   test_evm.py           # CPU unit tests
   test_evm_cuda.py      # GPU unit tests
   test_evm_cuda_shim.py # CUDA pipeline tests on CPU (no GPU needed)
+  test_synthetic_shapes.py # Gain, lag and isotropy on shapes with exact ground truth
+scripts/
+  synthetic_shapes.py   # Synthetic pulsating shapes and measurements
 docs/design/            # Architecture decision records
 VERSION                 # Single source of truth for version
 CHANGELOG.md            # Release history
