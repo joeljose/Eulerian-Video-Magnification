@@ -150,29 +150,44 @@ def load_video(path, fps=None, xp=np):
     return frames_to_yiq(frames, xp), fps
 
 
-def save_video(video_yiq, fps, path):
-    """Save a YIQ float video array (numpy or cupy) to an AVI file with
-    MJPG codec.
+def open_writer(path, fps, frame_size):
+    """An MJPG VideoWriter for `path`, frame_size = (width, height).
 
-    Converts YIQ → RGB → BGR and rounds to uint8 on the array's device,
-    then copies one frame at a time to the host and writes it.
+    Raises RuntimeError if it can't be opened (missing codec, bad path).
     """
-    xp = _backend(video_yiq)[0]
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    h, w = video_yiq.shape[1], video_yiq.shape[2]
-    writer = cv2.VideoWriter(path, fourcc, fps, (w, h), True)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'MJPG'), fps, frame_size, True)
     if not writer.isOpened():
         raise RuntimeError(f"could not open video writer for {path} (MJPG)")
-    try:
-        for i in range(video_yiq.shape[0]):
-            rgb = yiq_to_rgb(video_yiq[i])
-            bgr = xp.clip(xp.rint(rgb[:, :, ::-1] * 255), 0, 255).astype(xp.uint8)
-            writer.write(np.ascontiguousarray(_to_numpy(bgr)))
-    finally:
-        writer.release()
+    return writer
+
+
+def write_yiq(writer, frames_yiq):
+    """Write YIQ float frames (numpy or cupy) as rounded BGR uint8."""
+    xp = _backend(frames_yiq)[0]
+    rgb = yiq_to_rgb(frames_yiq)
+    bgr = _to_numpy(xp.clip(xp.rint(rgb[..., ::-1] * 255), 0, 255).astype(xp.uint8))
+    for frame in bgr:
+        writer.write(np.ascontiguousarray(frame))
+
+
+def close_writer(writer, path):
+    """Release the writer; raise RuntimeError if it wrote nothing."""
+    writer.release()
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         raise RuntimeError(f"video writer produced no output at {path}")
     print(f"Output saved to {path}")
+
+
+def save_video(video_yiq, fps, path):
+    """Save a YIQ float video array (numpy or cupy) to an AVI file with
+    MJPG codec."""
+    writer = open_writer(path, fps, (video_yiq.shape[2], video_yiq.shape[1]))
+    try:
+        write_yiq(writer, video_yiq)
+    except BaseException:
+        writer.release()
+        raise
+    close_writer(writer, path)
 
 
 # OpenCV's pyramid kernel: binomial [1 4 6 4 1] / 16
@@ -180,7 +195,7 @@ _PYR_KERNEL = np.array([1, 4, 6, 4, 1], dtype=np.float32) / 16
 
 # Frames per pyramid batch: large enough to vectorise, small enough that the
 # temporaries stay a fraction of the video
-_PYR_BLOCK = 32
+_PYR_BLOCK = 8
 
 
 def _pyr_filter(x, kernel):
@@ -238,45 +253,6 @@ def pyr_up(x, dst_hw):
     return _ndimage_pyr_up(x, dst_hw)
 
 
-def create_laplacian_video_pyramid(video, pyramid_levels):
-    """Decompose every frame into a Laplacian pyramid.
-
-    Returns a list of arrays, one per pyramid level. Each array has shape
-    (num_frames, level_height, level_width, 3). Level 0 is the finest
-    (full resolution), level N-1 is the coarsest (the Gaussian residual).
-    Frames are processed in blocks of _PYR_BLOCK.
-    """
-    xp = _backend(video)[0]
-    num_frames = video.shape[0]
-    shapes = [video.shape[1:3]]
-    for _ in range(1, pyramid_levels):
-        h, w = shapes[-1]
-        shapes.append(((h + 1) // 2, (w + 1) // 2))
-    vid_pyramid = [xp.empty((num_frames, h, w, 3), dtype=xp.float32) for h, w in shapes]
-
-    t_start = time.time()
-    next_report = 0.1
-    for start in range(0, num_frames, _PYR_BLOCK):
-        end = min(start + _PYR_BLOCK, num_frames)
-        gauss = video[start:end]
-        for i in range(pyramid_levels - 1):
-            down = pyr_down(gauss)
-            vid_pyramid[i][start:end] = gauss - pyr_up(down, shapes[i])
-            gauss = down
-        vid_pyramid[-1][start:end] = gauss
-
-        # Progress reporting every 10%
-        pct = end / num_frames
-        if pct >= next_report and end < num_frames:
-            _sync(xp)
-            eta = (time.time() - t_start) / pct * (1 - pct)
-            print(f"  Pyramid: {end}/{num_frames} frames "
-                  f"({pct:.0%}) — {format_duration(eta)} remaining")
-            next_report = pct + 0.1
-
-    return vid_pyramid
-
-
 def passband_freqs(n, fps, freq_low, freq_high):
     """Return the FFT bin frequencies that the ideal filter keeps.
 
@@ -325,24 +301,6 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     return (0.5 * filtered).astype(xp.float32)
 
 
-def collapse_laplacian_pyramid(image_pyramid):
-    """Reconstruct an image (or a block of frames) from its pyramid levels."""
-    img = image_pyramid[-1]
-    for level in reversed(image_pyramid[:-1]):
-        img = pyr_up(img, level.shape[-3:-1]) + level
-    return img
-
-
-def collapse_laplacian_video_pyramid(pyramid):
-    """Reconstruct a full video from its Laplacian video pyramid, in place
-    in level 0, in blocks of _PYR_BLOCK frames."""
-    num_frames = pyramid[0].shape[0]
-    for start in range(0, num_frames, _PYR_BLOCK):
-        block = slice(start, start + _PYR_BLOCK)
-        pyramid[0][block] = collapse_laplacian_pyramid([level[block] for level in pyramid])
-    return pyramid[0]
-
-
 def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
     """Per-level amplification, finest level first (MATLAB reference, Fig. 6).
 
@@ -372,19 +330,97 @@ def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
     return level_alphas
 
 
+# Bytes of level data per temporal-filter chunk; bounds the FFT temporaries
+_FILTER_CHUNK_BYTES = 32 * 1024 ** 2
+
+
+def pyramid_shapes(height, width, pyramid_levels):
+    """(height, width) of each pyramid level, finest first."""
+    shapes = [(height, width)]
+    for _ in range(1, pyramid_levels):
+        h, w = shapes[-1]
+        shapes.append(((h + 1) // 2, (w + 1) // 2))
+    return shapes
+
+
+def magnify_blocks(read_block, num_frames, height, width, fps, freq_min, freq_max,
+                   alpha, pyramid_levels=4, lambda_c=1000, chrom_attenuation=1.0,
+                   xp=np):
+    """The EVM pipeline, yielding the output in blocks of frames.
+
+    `read_block(start, end)` returns frames [start, end) as YIQ float32 on
+    `xp`; it is called twice per block (to build the pyramid, and to add
+    the result back), so the input never has to be held as floats. Yields
+    (start, end, magnified YIQ frames).
+
+    Collapsing a Laplacian pyramid is linear, and only the levels with a
+    non-zero gain change, so the output is
+        input + collapse(gain_i * bandpass(level_i) for amplified levels).
+    Only the amplified levels are stored (at most 1/3 of the video's size;
+    level 0 and the low-pass residual never are).
+
+    Steps, following the reference MATLAB implementation
+    (amplify_spatial_lpyr_temporal_ideal.m):
+    1. Build the amplified Laplacian levels (spatial decomposition)
+    2. Ideal bandpass filter each of them over time
+    3. Amplify with the adaptive per-level alpha from lambda_c
+    4. Attenuate the I/Q (colour) channels by chrom_attenuation
+    5. Collapse the amplified signal and add it to the input
+    """
+    blocks = [(a, min(a + _PYR_BLOCK, num_frames)) for a in range(0, num_frames, _PYR_BLOCK)]
+    level_alphas = compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c)
+    amplified = [i for i, a in enumerate(level_alphas) if a > 0]
+    if not amplified:
+        for start, end in blocks:
+            yield start, end, read_block(start, end)
+        return
+    shapes = pyramid_shapes(height, width, pyramid_levels)
+    deepest = max(amplified)
+    levels = {i: xp.empty((num_frames,) + shapes[i] + (3,), dtype=xp.float32)
+              for i in amplified}
+
+    print("Building Laplacian pyramid...")
+    t0 = time.time()
+    for start, end in blocks:
+        gauss = read_block(start, end)
+        for i in range(deepest + 1):
+            down = pyr_down(gauss)
+            if i in levels:
+                levels[i][start:end] = gauss - pyr_up(down, shapes[i])
+            gauss = down
+    _sync(xp)
+    print(f"  Done in {format_duration(time.time() - t0)}")
+
+    print("Filtering and amplifying...")
+    t0 = time.time()
+    for i in amplified:
+        gains = xp.asarray(np.float32(level_alphas[i])
+                           * np.array([1, chrom_attenuation, chrom_attenuation], np.float32))
+        pixels = levels[i].reshape(num_frames, -1, 3)  # a view
+        step = max(1, _FILTER_CHUNK_BYTES // (num_frames * 3 * 4))
+        for p in range(0, pixels.shape[1], step):
+            chunk = pixels[:, p:p + step]
+            chunk[...] = ideal_bandpass_filter(chunk, fps, freq_min, freq_max) * gains
+    _sync(xp)
+    print(f"  Done in {format_duration(time.time() - t0)}")
+
+    print("Reconstructing...")
+    t0 = time.time()
+    for start, end in blocks:
+        delta = levels[deepest][start:end]
+        for i in range(deepest - 1, -1, -1):
+            delta = pyr_up(delta, shapes[i])
+            if i in levels:
+                delta += levels[i][start:end]
+        yield start, end, read_block(start, end) + delta
+    _sync(xp)
+    print(f"  Done in {format_duration(time.time() - t0)}")
+
+
 def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
                            pyramid_levels=4, lambda_c=1000,
-                           chrom_attenuation=1.0):
-    """Run the full Eulerian Video Magnification pipeline.
-
-    Follows the reference MATLAB implementation
-    (amplify_spatial_lpyr_temporal_ideal.m):
-
-    1. Build Laplacian video pyramid (spatial decomposition)
-    2. Ideal bandpass filter each pyramid level temporally
-    3. Amplify with adaptive per-level alpha based on lambda_c
-    4. Apply chromatic attenuation to I/Q channels
-    5. Add filtered signal back to pyramid and reconstruct
+                           chrom_attenuation=1.0, out=None):
+    """Run the Eulerian Video Magnification pipeline on a whole video.
 
     Args:
         video: Input video in YIQ color space (num_frames, H, W, 3), a
@@ -399,78 +435,39 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
             lower values give stronger amplification.
         chrom_attenuation: Attenuation factor for I/Q (color) channels.
             1.0 = full color amplification, 0.0 = luminance only.
+        out: Array to write the result into; pass `video` itself to
+            magnify in place and save its memory. Default: a new array.
+
+    See magnify_blocks for how it works.
     """
     xp = _backend(video)[0]
+    if out is None:
+        out = xp.empty_like(video)
     total_start = time.time()
-    height, width = video.shape[1], video.shape[2]
-    n_levels = pyramid_levels
-
-    print("Building Laplacian video pyramid...")
-    t0 = time.time()
-    vid_pyramid = create_laplacian_video_pyramid(video, n_levels)
-    del video  # the caller may still hold the input; see issue #32
-    _sync(xp)
-    print(f"  Done in {format_duration(time.time() - t0)}")
-
-    print("Filtering and amplifying...")
-    t0 = time.time()
-
-    level_alphas = compute_level_alphas(height, width, n_levels, alpha,
-                                        lambda_c)
-
-    # Filter, amplify, and add back — one level at a time to limit memory
-    for i in range(n_levels):
-        if level_alphas[i] == 0.0:
-            continue  # skip levels that would be zeroed out (saves FFT)
-
-        filtered = ideal_bandpass_filter(
-            vid_pyramid[i], fps, freq_min, freq_max
-        )
-        # Amplify: full alpha on Y, attenuated on I/Q
-        filtered[:, :, :, 0] *= level_alphas[i]
-        filtered[:, :, :, 1] *= level_alphas[i] * chrom_attenuation
-        filtered[:, :, :, 2] *= level_alphas[i] * chrom_attenuation
-
-        vid_pyramid[i] += filtered
-        del filtered  # free memory immediately
-
-    _sync(xp)
-    print(f"  Done in {format_duration(time.time() - t0)}")
-
-    print("Reconstructing video from pyramid...")
-    t0 = time.time()
-    result = collapse_laplacian_video_pyramid(vid_pyramid)
-    _sync(xp)
-    print(f"  Done in {format_duration(time.time() - t0)}")
-
-    print(f"Total processing time: "
-          f"{format_duration(time.time() - total_start)}")
-    return result
+    for start, end, block in magnify_blocks(
+            lambda a, b: video[a:b], video.shape[0], video.shape[1], video.shape[2],
+            fps, freq_min, freq_max, alpha, pyramid_levels, lambda_c,
+            chrom_attenuation, xp):
+        out[start:end] = block
+    print(f"Total processing time: {format_duration(time.time() - total_start)}")
+    return out
 
 
 def estimate_vram_bytes(num_frames, height, width, pyramid_levels):
-    """Estimate peak GPU memory usage in bytes.
+    """Estimate peak GPU memory of magnify_blocks in bytes.
 
-    Peak occurs during FFT filtering: all pyramid levels are allocated,
-    plus one FFT buffer for the largest level being filtered. The input
-    video is freed before filtering starts.
+    The frames stay on the host as uint8. The GPU holds the amplified
+    levels (levels 1 to N-2, float32, all frames), a few blocks of
+    _PYR_BLOCK full-resolution frames, and the temporal filter's FFT
+    buffers and cuFFT plans, which scale with _FILTER_CHUNK_BYTES.
     """
-    bytes_per_pixel = 3 * 4  # 3 channels × float32
-
-    # Pyramid levels: each level is ~1/4 the previous
-    pyramid_bytes = 0
-    h, w = height, width
-    for _ in range(pyramid_levels):
-        pyramid_bytes += num_frames * h * w * bytes_per_pixel
-        h = h // 2
-        w = w // 2
-
-    # FFT buffer: complex64 for float32 input, on the largest filtered level
-    # (level 1, which is half resolution — level 0 is skipped)
-    fft_h, fft_w = height // 2, width // 2
-    fft_buffer = num_frames * fft_h * fft_w * 3 * 8  # complex64
-
-    return pyramid_bytes + fft_buffer
+    shapes = pyramid_shapes(height, width, pyramid_levels)
+    levels = num_frames * sum(h * w for h, w in shapes[1:-1]) * 3 * 4
+    block = _PYR_BLOCK * height * width * 3 * 4
+    # ponytail: 4 blocks + 11 chunks fitted to cupy memory-pool peaks on an
+    # RTX 4050 (face.mp4 at 60/150/301 frames, 1080p x 60, 720p x 200,
+    # 240p x 900; all within 25%); re-fit if the pipeline's buffers change
+    return levels + 4 * block + 11 * _FILTER_CHUNK_BYTES
 
 
 def check_vram(num_frames, height, width, pyramid_levels, device_id):
@@ -660,8 +657,6 @@ def main(argv=None):
     print(f"  {n_frames} frames, {width}x{height}, {fps} fps")
     if args.gpu:
         check_vram(n_frames, height, width, args.pyramid_levels, args.device)
-    video = frames_to_yiq(frames, xp)
-    del frames
 
     # --- Nyquist check ---
     nyquist = fps / 2.0
@@ -700,22 +695,32 @@ def main(argv=None):
     print(f"  Lambda_c:            {args.lambda_c}")
     print(f"  Chrom attenuation:   {args.chrom_attenuation}\n")
 
-    result = eulerian_magnification(
-        video, fps,
-        freq_min=args.freq_low,
-        freq_max=args.freq_high,
-        alpha=args.amplification,
-        pyramid_levels=args.pyramid_levels,
-        lambda_c=args.lambda_c,
-        chrom_attenuation=args.chrom_attenuation,
-    )
-
-    # --- Save ---
+    # --- Run and save ---
+    # The frames stay uint8 on the host; each block is converted to YIQ
+    # when needed and written as soon as it is magnified.
     try:
-        save_video(result, fps, args.output)
+        writer = open_writer(args.output, fps, (width, height))
+        t0 = time.time()
+        try:
+            for _, _, block in magnify_blocks(
+                    lambda a, b: frames_to_yiq(frames[a:b], xp),
+                    n_frames, height, width, fps,
+                    freq_min=args.freq_low,
+                    freq_max=args.freq_high,
+                    alpha=args.amplification,
+                    pyramid_levels=args.pyramid_levels,
+                    lambda_c=args.lambda_c,
+                    chrom_attenuation=args.chrom_attenuation,
+                    xp=xp):
+                write_yiq(writer, block)
+        except BaseException:
+            writer.release()
+            raise
+        close_writer(writer, args.output)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    print(f"Total processing time: {format_duration(time.time() - t0)}")
 
 
 if __name__ == '__main__':

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Peak memory: the pipeline stores only the amplified pyramid levels and adds their collapse to the input, and the CLI keeps frames as uint8 and writes output as it goes. face.mp4 peaks at 0.90 GiB of RAM instead of 4.1 GiB, and 0.88 GiB of VRAM, with the same output (#32)
+- The VRAM estimate now matches measured use to within 25%, and the README memory figures are measured (#32, #42)
 - The GPU pyramid used different filters from the CPU one (Gaussian sigma 1 and bilinear zoom instead of OpenCV's 5-tap kernel), so CPU and GPU amplified different content; both now use OpenCV's operators and match to float precision (#35)
 - Output pixels were truncated to uint8 instead of rounded, which darkened the output slightly
 - `nan` and `inf` were accepted for `-a`, `-fl`, `-fh`, `--lambda-c` and `--fps`
@@ -31,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The CUDA image is only built in CI when its inputs change (#34)
 
 ### Added
+- `eulerian_magnification(..., out=video)` magnifies in place; `magnify_blocks()` yields the output in blocks for streaming (#32)
+- The notebook imports `evm` instead of keeping its own copy of the algorithm, and plots the forehead's brightness before and after (#37)
+- README section "What the parameters really do" (#42)
 - `pip install .` / `pip install .[cuda]` install the `evm` command and module (#39)
 - `--fps` to set the input frame rate for files that don't report one
 - Synthetic validation: `scripts/synthetic_shapes.py` and `tests/test_synthetic_shapes.py` measure gain, phase lag and isotropy on pulsating shapes with exact ground truth (adapted from Motion-Magnification-Using-2D-DTCWT)
