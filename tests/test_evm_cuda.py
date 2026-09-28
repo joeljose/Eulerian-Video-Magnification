@@ -1,122 +1,56 @@
-"""Unit tests for evm_cuda.py — GPU Eulerian Video Magnification.
+"""GPU tests for evm.py: the same code run on CuPy arrays.
 
 Requires CuPy and an NVIDIA GPU. Run via: ./test.sh gpu
 """
 
+import contextlib
+import io
 import os
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
 cp = pytest.importorskip("cupy")
 
-# Add project root to path so we can import evm_cuda
+# Add project root to path so we can import evm
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import evm_cuda  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# VRAM estimation (pure math — no GPU needed, but lives in evm_cuda)
-# ---------------------------------------------------------------------------
-
-class TestEstimateVramBytes:
-    """Pure arithmetic — exact equality."""
-
-    def test_known_values(self):
-        # 100 frames, 480x640, 4 levels
-        # Level 0: 100 * 480 * 640 * 12 = 368,640,000
-        # Level 1: 100 * 240 * 320 * 12 = 92,160,000
-        # Level 2: 100 * 120 * 160 * 12 = 23,040,000
-        # Level 3: 100 * 60 * 80 * 12   = 5,760,000
-        # Pyramid total = 489,600,000
-        # FFT buffer (level 1): 100 * 240 * 320 * 3 * 8 = 184,320,000
-        # Total = 673,920,000
-        result = evm_cuda.estimate_vram_bytes(100, 480, 640, 4)
-        assert result == 673_920_000
-
-    def test_single_frame(self):
-        result = evm_cuda.estimate_vram_bytes(1, 100, 100, 2)
-        # Level 0: 1 * 100 * 100 * 12 = 120,000
-        # Level 1: 1 * 50 * 50 * 12 = 30,000
-        # FFT buffer: 1 * 50 * 50 * 24 = 60,000
-        assert result == 210_000
+import evm  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# GPU color conversion
-# ---------------------------------------------------------------------------
-
-class TestGpuColorConversion:
-    """Color conversion roundtrip on GPU."""
-
-    @pytest.fixture(autouse=True)
-    def init_gpu(self):
-        evm_cuda._init_gpu_matrices()
-
-    def test_roundtrip(self):
-        rng = np.random.RandomState(42)
-        frame_np = rng.rand(16, 16, 3).astype(np.float32)
-        frame_gpu = cp.asarray(frame_np)
-
-        yiq = frame_gpu @ evm_cuda._RGB_TO_YIQ.T
-        recovered = yiq @ evm_cuda._YIQ_TO_RGB.T
-        recovered_np = cp.asnumpy(recovered)
-
-        np.testing.assert_allclose(recovered_np, frame_np, atol=1e-6)
+def test_color_roundtrip():
+    frame = cp.asarray(np.random.RandomState(42).rand(16, 16, 3).astype(np.float32))
+    recovered = evm.yiq_to_rgb(evm.rgb_to_yiq(frame))
+    np.testing.assert_allclose(cp.asnumpy(recovered), cp.asnumpy(frame), atol=1e-6)
 
 
-# ---------------------------------------------------------------------------
-# GPU pyramid operations
-# ---------------------------------------------------------------------------
-
-class TestGpuPyramidOps:
-    """GPU pyrDown/pyrUp basic sanity checks."""
-
-    def test_pyr_down_shape(self):
-        frame = cp.random.rand(64, 64, 3).astype(cp.float32)
-        down = evm_cuda.gpu_pyr_down(frame)
-        assert down.shape == (32, 32, 3)
-
-    def test_pyr_up_shape(self):
-        frame = cp.random.rand(16, 16, 3).astype(cp.float32)
-        up = evm_cuda.gpu_pyr_up(frame, (32, 32))
-        assert up.shape == (32, 32, 3)
-
-    def test_pyr_down_values_finite(self):
-        frame = cp.random.rand(32, 32, 3).astype(cp.float32)
-        down = evm_cuda.gpu_pyr_down(frame)
-        assert cp.all(cp.isfinite(down))
-
-    def test_pyr_up_values_finite(self):
-        frame = cp.random.rand(16, 16, 3).astype(cp.float32)
-        up = evm_cuda.gpu_pyr_up(frame, (32, 32))
-        assert cp.all(cp.isfinite(up))
+@pytest.mark.parametrize("shape", [(64, 64), (63, 65), (37, 50)])
+def test_pyramid_matches_opencv(shape):
+    """Issue #35: the GPU pyramid used different filters from the CPU one."""
+    h, w = shape
+    x = np.random.RandomState(0).rand(h, w, 3).astype(np.float32)
+    down = evm.pyr_down(cp.asarray(x))
+    np.testing.assert_allclose(cp.asnumpy(down), cv2.pyrDown(x), atol=1e-5)
+    up = evm.pyr_up(down, (h, w))
+    np.testing.assert_allclose(cp.asnumpy(up), cv2.pyrUp(cv2.pyrDown(x), dstsize=(w, h)),
+                               atol=1e-5)
 
 
-# ---------------------------------------------------------------------------
-# GPU bandpass filter
-# ---------------------------------------------------------------------------
+def test_bandpass_rejects_out_of_band():
+    t = cp.arange(300) / 30.0
+    data = cp.sin(2 * cp.pi * 10.0 * t).astype(cp.float32).reshape(300, 1, 1, 1)
+    filtered = evm.ideal_bandpass_filter(data, 30.0, 1.0, 3.0)
+    assert float(cp.sum(filtered ** 2)) / float(cp.sum(data ** 2)) < 0.01
 
-class TestGpuBandpassFilter:
-    """GPU FFT bandpass filter."""
 
-    def test_rejects_out_of_band(self):
-        """A 10Hz signal with bandpass 1-3Hz should be zeroed."""
-        fps = 30.0
-        n_frames = 300
-        t = cp.arange(n_frames) / fps
-
-        signal = cp.sin(2 * cp.pi * 10.0 * t).astype(cp.float32)
-        data = signal.reshape(n_frames, 1, 1, 1) * cp.ones((1, 1, 1, 3), dtype=cp.float32)
-
-        filtered = evm_cuda.ideal_bandpass_filter(data, fps, 1.0, 3.0)
-
-        input_energy = float(cp.sum(data ** 2))
-        output_energy = float(cp.sum(filtered ** 2))
-        assert output_energy / input_energy < 0.01
-
-    def test_dc_rejected(self):
-        """Constant signal should be rejected."""
-        data = cp.ones((60, 2, 2, 3), dtype=cp.float32)
-        filtered = evm_cuda.ideal_bandpass_filter(data, 30.0, 1.0, 5.0)
-        cp.testing.assert_allclose(filtered, 0.0, atol=1e-6)
+def test_gpu_matches_cpu_end_to_end():
+    """Acceptance for #35: CPU vs GPU PSNR >= 60 dB."""
+    rng = np.random.RandomState(3)
+    video = evm.rgb_to_yiq(rng.rand(60, 48, 64, 3).astype(np.float32))
+    args = (30.0, 0.5, 3.0, 20.0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        cpu = evm.eulerian_magnification(video.copy(), *args, lambda_c=10)
+        gpu = cp.asnumpy(evm.eulerian_magnification(cp.asarray(video), *args, lambda_c=10))
+    mse = np.mean((cpu - gpu) ** 2)
+    assert 10 * np.log10(1.0 / max(mse, 1e-30)) >= 60

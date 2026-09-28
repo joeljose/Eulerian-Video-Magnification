@@ -316,6 +316,60 @@ class TestFpsOverride:
         assert fps == 25.0 and video.shape[0] == 3
 
 
+class TestPyramidMatchesOpenCV:
+    """The ndimage pyramid used on the GPU reproduces cv2.pyrDown / pyrUp,
+    which the CPU uses (issue #35)."""
+
+    @pytest.mark.parametrize("shape", [(64, 64), (63, 65), (37, 50), (5, 7)])
+    def test_pyr_down(self, shape):
+        x = np.random.RandomState(0).rand(*shape, 3).astype(np.float32)
+        np.testing.assert_allclose(evm._ndimage_pyr_down(x), cv2.pyrDown(x), atol=1e-5)
+
+    @pytest.mark.parametrize("shape", [(64, 64), (63, 65), (37, 50), (5, 7)])
+    def test_pyr_up(self, shape):
+        h, w = shape
+        small = cv2.pyrDown(np.random.RandomState(1).rand(h, w, 3).astype(np.float32))
+        np.testing.assert_allclose(evm._ndimage_pyr_up(small, (h, w)),
+                                   cv2.pyrUp(small, dstsize=(w, h)), atol=1e-5)
+
+    def test_batched(self):
+        video = np.random.RandomState(2).rand(3, 21, 30, 3).astype(np.float32)
+        down = evm._ndimage_pyr_down(video)
+        np.testing.assert_allclose(evm.pyr_down(video), down, atol=1e-5)
+        np.testing.assert_allclose(evm.pyr_up(down, (21, 30)),
+                                   evm._ndimage_pyr_up(down, (21, 30)), atol=1e-5)
+
+
+class TestEstimateVramBytes:
+    """Pure arithmetic — exact equality."""
+
+    def test_known_values(self):
+        # 100 frames, 480x640, 4 levels
+        # Level 0: 100 * 480 * 640 * 12 = 368,640,000
+        # Level 1: 100 * 240 * 320 * 12 = 92,160,000
+        # Level 2: 100 * 120 * 160 * 12 = 23,040,000
+        # Level 3: 100 * 60 * 80 * 12   = 5,760,000
+        # Pyramid total = 489,600,000
+        # FFT buffer (level 1): 100 * 240 * 320 * 3 * 8 = 184,320,000
+        # Total = 673,920,000
+        result = evm.estimate_vram_bytes(100, 480, 640, 4)
+        assert result == 673_920_000
+
+    def test_single_frame(self):
+        result = evm.estimate_vram_bytes(1, 100, 100, 2)
+        # Level 0: 1 * 100 * 100 * 12 = 120,000
+        # Level 1: 1 * 50 * 50 * 12 = 30,000
+        # FFT buffer: 1 * 50 * 50 * 24 = 60,000
+        assert result == 210_000
+
+
+class TestVersion:
+    def test_version_file_matches(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "VERSION")) as f:
+            assert f.read().strip() == evm.__version__
+
+
 class TestLevelAlphas:
     def test_face_defaults(self):
         # Pins current MATLAB-parity behaviour for face.mp4 (528x592) at the
@@ -409,6 +463,16 @@ class TestInputValidation:
         code, stderr = run_evm("-i", clip, "-fl", "1", "-fh", "20")
         assert code == 1
         assert "Nyquist" in stderr
+
+    def test_gpu_without_cupy(self, dummy_video):
+        try:
+            import cupy  # noqa: F401
+            pytest.skip("CuPy is installed")
+        except ImportError:
+            pass
+        code, stderr = run_evm("-i", dummy_video, "--gpu")
+        assert code == 1
+        assert "requires CuPy" in stderr
 
     def test_output_dir_missing(self, dummy_video, tmp_path):
         out = str(tmp_path / "missing" / "out.avi")

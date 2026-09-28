@@ -4,6 +4,10 @@ Eulerian Video Magnification — CLI tool.
 Amplifies subtle temporal variations (color changes, small motions) in video
 using spatial decomposition, temporal bandpass filtering, and reconstruction.
 
+Runs on the CPU with NumPy/SciPy, or on an NVIDIA GPU with CuPy (--gpu).
+Every step is written once: the array functions pick NumPy or CuPy from the
+type of the array they are given (see _backend).
+
 Based on: Wu et al., "Eulerian Video Magnification for Revealing Subtle
 Changes in the World", SIGGRAPH 2012.
 
@@ -21,6 +25,7 @@ import time
 import cv2
 import numpy as np
 import scipy.fft
+import scipy.ndimage
 
 # YIQ/NTSC color space conversion matrices (matches MATLAB rgb2ntsc/ntsc2rgb)
 _RGB_TO_YIQ = np.array([
@@ -30,6 +35,28 @@ _RGB_TO_YIQ = np.array([
 ], dtype=np.float32)
 
 _YIQ_TO_RGB = np.linalg.inv(_RGB_TO_YIQ).astype(np.float32)
+
+
+def _backend(array):
+    """(xp, ndimage, fft) modules for an array: CuPy's for a CuPy array,
+    else NumPy/SciPy's. CuPy is only imported when a CuPy array appears."""
+    if type(array).__module__.split('.')[0] == 'cupy':
+        import cupy
+        import cupyx.scipy.fft
+        import cupyx.scipy.ndimage
+        return cupy, cupyx.scipy.ndimage, cupyx.scipy.fft
+    return np, scipy.ndimage, scipy.fft
+
+
+def _to_numpy(array):
+    """Copy a CuPy array to the host; NumPy arrays pass through."""
+    return array.get() if hasattr(array, 'get') else array
+
+
+def _sync(xp):
+    """Wait for queued GPU work, so timings are real."""
+    if xp is not np:
+        xp.cuda.Stream.null.synchronize()
 
 
 def format_duration(seconds):
@@ -42,13 +69,15 @@ def format_duration(seconds):
 
 
 def rgb_to_yiq(frame):
-    """Convert an RGB float frame to YIQ color space."""
-    return frame @ _RGB_TO_YIQ.T
+    """Convert an RGB float frame (or video) to YIQ color space."""
+    xp = _backend(frame)[0]
+    return frame @ xp.asarray(_RGB_TO_YIQ.T)
 
 
 def yiq_to_rgb(frame):
-    """Convert a YIQ float frame to RGB color space."""
-    return frame @ _YIQ_TO_RGB.T
+    """Convert a YIQ float frame (or video) to RGB color space."""
+    xp = _backend(frame)[0]
+    return frame @ xp.asarray(_YIQ_TO_RGB.T)
 
 
 def read_frames(path, fps=None):
@@ -99,26 +128,36 @@ def read_frames(path, fps=None):
     return frames, fps
 
 
-def load_video(path, fps=None):
-    """Load a video file and return (YIQ float32 numpy array, fps).
+def frames_to_yiq(frames, xp=np):
+    """uint8 BGR frames to a float32 YIQ array on `xp` (numpy or cupy).
 
-    The returned array has shape (num_frames, height, width, 3) in YIQ
-    color space with Y in [0, 1].
+    The uint8 frames are transferred first, so a GPU copy moves a quarter
+    of the bytes of the float video.
+    """
+    rgb = xp.asarray(frames)[:, :, :, ::-1].astype(xp.float32) / 255.0
+    yiq = rgb_to_yiq(rgb)
+    del rgb
+    return yiq
+
+
+def load_video(path, fps=None, xp=np):
+    """Load a video file and return (YIQ float32 array, fps).
+
+    The returned array is on `xp` (numpy, or cupy for the GPU), with shape
+    (num_frames, height, width, 3) in YIQ color space with Y in [0, 1].
     """
     frames, fps = read_frames(path, fps)
-    # Convert BGR→RGB→float→YIQ
-    rgb = frames[:, :, :, ::-1].astype(np.float32) / 255.0
-    del frames  # free uint8 buffer
-    yiq = rgb @ _RGB_TO_YIQ.T  # vectorized over all frames at once
-    del rgb
-    return yiq, fps
+    return frames_to_yiq(frames, xp), fps
 
 
 def save_video(video_yiq, fps, path):
-    """Save a YIQ float video array to an AVI file with MJPG codec.
+    """Save a YIQ float video array (numpy or cupy) to an AVI file with
+    MJPG codec.
 
-    Converts YIQ → RGB → BGR, clips to [0, 1], then writes.
+    Converts YIQ → RGB → BGR and rounds to uint8 on the array's device,
+    then copies one frame at a time to the host and writes it.
     """
+    xp = _backend(video_yiq)[0]
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     h, w = video_yiq.shape[1], video_yiq.shape[2]
     writer = cv2.VideoWriter(path, fourcc, fps, (w, h), True)
@@ -127,8 +166,8 @@ def save_video(video_yiq, fps, path):
     try:
         for i in range(video_yiq.shape[0]):
             rgb = yiq_to_rgb(video_yiq[i])
-            bgr = np.clip(np.rint(rgb[:, :, ::-1] * 255), 0, 255).astype(np.uint8)
-            writer.write(bgr)
+            bgr = xp.clip(xp.rint(rgb[:, :, ::-1] * 255), 0, 255).astype(xp.uint8)
+            writer.write(np.ascontiguousarray(_to_numpy(bgr)))
     finally:
         writer.release()
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -136,49 +175,104 @@ def save_video(video_yiq, fps, path):
     print(f"Output saved to {path}")
 
 
+# OpenCV's pyramid kernel: binomial [1 4 6 4 1] / 16
+_PYR_KERNEL = np.array([1, 4, 6, 4, 1], dtype=np.float32) / 16
+
+# Frames per pyramid batch: large enough to vectorise, small enough that the
+# temporaries stay a fraction of the video
+_PYR_BLOCK = 32
+
+
+def _pyr_filter(x, kernel):
+    """Separable filter over the two spatial axes of (..., H, W, C).
+
+    'mirror' is OpenCV's BORDER_REFLECT_101.
+    """
+    xp, ndimage, _ = _backend(x)
+    k = xp.asarray(kernel)
+    x = ndimage.correlate1d(x, k, axis=-3, mode='mirror')
+    return ndimage.correlate1d(x, k, axis=-2, mode='mirror')
+
+
+def _ndimage_pyr_down(x):
+    """cv2.pyrDown with ndimage: blur, then keep every second pixel."""
+    return _pyr_filter(x, _PYR_KERNEL)[..., ::2, ::2, :]
+
+
+def _ndimage_pyr_up(x, dst_hw):
+    """cv2.pyrUp with ndimage, to size dst_hw = (H, W).
+
+    Inserts zeros to 2h x 2w, filters with 4x the kernel (2x per axis),
+    then crops to (H, W). Matches OpenCV to float precision, odd sizes too.
+    """
+    xp = _backend(x)[0]
+    h, w = x.shape[-3:-1]
+    up = xp.zeros(x.shape[:-3] + (2 * h, 2 * w, x.shape[-1]), dtype=x.dtype)
+    up[..., ::2, ::2, :] = x
+    return _pyr_filter(up, 2 * _PYR_KERNEL)[..., :dst_hw[0], :dst_hw[1], :]
+
+
+def _per_frame(x, func):
+    """Apply an OpenCV (H, W, C) function to each frame of (..., H, W, C)."""
+    if x.ndim == 3:
+        return func(x)
+    out = np.stack([func(f) for f in x.reshape((-1,) + x.shape[-3:])])
+    return out.reshape(x.shape[:-3] + out.shape[1:])
+
+
+def pyr_down(x):
+    """cv2.pyrDown on the spatial axes of (..., H, W, C).
+
+    NumPy input uses OpenCV itself (about 10x faster than scipy.ndimage);
+    CuPy input uses the ndimage version, which tests keep equal to OpenCV.
+    """
+    if _backend(x)[0] is np:
+        return _per_frame(x, cv2.pyrDown)
+    return _ndimage_pyr_down(x)
+
+
+def pyr_up(x, dst_hw):
+    """cv2.pyrUp on (..., h, w, C) to size dst_hw = (H, W); see pyr_down."""
+    if _backend(x)[0] is np:
+        return _per_frame(x, lambda f: cv2.pyrUp(f, dstsize=(dst_hw[1], dst_hw[0])))
+    return _ndimage_pyr_up(x, dst_hw)
+
+
 def create_laplacian_video_pyramid(video, pyramid_levels):
     """Decompose every frame into a Laplacian pyramid.
 
     Returns a list of arrays, one per pyramid level. Each array has shape
     (num_frames, level_height, level_width, 3). Level 0 is the finest
-    (full resolution), level N-1 is the coarsest.
+    (full resolution), level N-1 is the coarsest (the Gaussian residual).
+    Frames are processed in blocks of _PYR_BLOCK.
     """
+    xp = _backend(video)[0]
     num_frames = video.shape[0]
-    vid_pyramid = []
+    shapes = [video.shape[1:3]]
+    for _ in range(1, pyramid_levels):
+        h, w = shapes[-1]
+        shapes.append(((h + 1) // 2, (w + 1) // 2))
+    vid_pyramid = [xp.empty((num_frames, h, w, 3), dtype=xp.float32) for h, w in shapes]
 
     t_start = time.time()
-    for frame_idx in range(num_frames):
-        # Build Gaussian pyramid for this frame
-        gauss = [video[frame_idx]]
-        for _ in range(1, pyramid_levels):
-            gauss.append(cv2.pyrDown(gauss[-1]))
-
-        # Build Laplacian pyramid from Gaussian
-        lap = []
+    next_report = 0.1
+    for start in range(0, num_frames, _PYR_BLOCK):
+        end = min(start + _PYR_BLOCK, num_frames)
+        gauss = video[start:end]
         for i in range(pyramid_levels - 1):
-            lap.append(gauss[i] - cv2.pyrUp(gauss[i + 1], dstsize=(gauss[i].shape[1], gauss[i].shape[0])))
-        lap.append(gauss[-1])  # coarsest level
-
-        # Allocate pyramid storage on first frame
-        if frame_idx == 0:
-            for level in lap:
-                vid_pyramid.append(np.zeros(
-                    (num_frames, level.shape[0], level.shape[1], 3),
-                    dtype=np.float32
-                ))
-
-        for level_idx, level in enumerate(lap):
-            vid_pyramid[level_idx][frame_idx] = level
+            down = pyr_down(gauss)
+            vid_pyramid[i][start:end] = gauss - pyr_up(down, shapes[i])
+            gauss = down
+        vid_pyramid[-1][start:end] = gauss
 
         # Progress reporting every 10%
-        if (frame_idx + 1) % max(1, num_frames // 10) == 0:
-            elapsed = time.time() - t_start
-            pct = (frame_idx + 1) / num_frames
-            eta = elapsed / pct * (1 - pct)
-            print(
-                f"  Pyramid: {frame_idx + 1}/{num_frames} frames "
-                f"({pct:.0%}) — {format_duration(eta)} remaining"
-            )
+        pct = end / num_frames
+        if pct >= next_report and end < num_frames:
+            _sync(xp)
+            eta = (time.time() - t_start) / pct * (1 - pct)
+            print(f"  Pyramid: {end}/{num_frames} frames "
+                  f"({pct:.0%}) — {format_duration(eta)} remaining")
+            next_report = pct + 0.1
 
     return vid_pyramid
 
@@ -208,6 +302,7 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     Raises ValueError if no frequency bin falls inside the band, since the
     output would then be all zeros.
     """
+    xp, _, fft = _backend(data)
     n = data.shape[0]
     freqs = np.fft.rfftfreq(2 * n, 1.0 / fps)
     keep = (freqs > freq_low) & (freqs < freq_high)
@@ -216,34 +311,35 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
             f"band {freq_low}-{freq_high} Hz contains no frequency bins "
             f"(resolution {fps / n:.3f} Hz for {n} frames at {fps} fps)"
         )
-    mask = keep.reshape([len(keep)] + [1] * (data.ndim - 1))
+    mask = xp.asarray(keep.reshape([len(keep)] + [1] * (data.ndim - 1)))
 
     # Clip followed by its time reverse: a seamless loop for the FFT
-    extended = np.concatenate([data, data[::-1]], axis=0)
-    spectrum = scipy.fft.rfft(extended, axis=0)
+    extended = xp.concatenate([data, data[::-1]], axis=0)
+    spectrum = fft.rfft(extended, axis=0)
     del extended
     spectrum *= mask
-    filtered = scipy.fft.irfft(spectrum, 2 * n, axis=0)[:n]
+    filtered = fft.irfft(spectrum, 2 * n, axis=0)[:n]
 
     # x0.5: the reference keeps positive frequencies only, which halves the
     # in-band signal. Kept for MATLAB parity; see issue #28.
-    return (0.5 * filtered).astype(np.float32)
+    return (0.5 * filtered).astype(xp.float32)
 
 
 def collapse_laplacian_pyramid(image_pyramid):
-    """Reconstruct an image from its Laplacian pyramid levels."""
+    """Reconstruct an image (or a block of frames) from its pyramid levels."""
     img = image_pyramid[-1]
-    for i in range(len(image_pyramid) - 2, -1, -1):
-        img = cv2.pyrUp(img, dstsize=(image_pyramid[i].shape[1], image_pyramid[i].shape[0])) + image_pyramid[i]
+    for level in reversed(image_pyramid[:-1]):
+        img = pyr_up(img, level.shape[-3:-1]) + level
     return img
 
 
 def collapse_laplacian_video_pyramid(pyramid):
-    """Reconstruct a full video from its Laplacian video pyramid."""
+    """Reconstruct a full video from its Laplacian video pyramid, in place
+    in level 0, in blocks of _PYR_BLOCK frames."""
     num_frames = pyramid[0].shape[0]
-    for i in range(num_frames):
-        frame_pyramid = [level[i] for level in pyramid]
-        pyramid[0][i] = collapse_laplacian_pyramid(frame_pyramid)
+    for start in range(0, num_frames, _PYR_BLOCK):
+        block = slice(start, start + _PYR_BLOCK)
+        pyramid[0][block] = collapse_laplacian_pyramid([level[block] for level in pyramid])
     return pyramid[0]
 
 
@@ -291,7 +387,8 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     5. Add filtered signal back to pyramid and reconstruct
 
     Args:
-        video: Input video in YIQ color space (num_frames, H, W, 3).
+        video: Input video in YIQ color space (num_frames, H, W, 3), a
+            NumPy array (CPU) or a CuPy array (GPU).
         fps: Frame rate.
         freq_min: Lower cutoff frequency (Hz).
         freq_max: Upper cutoff frequency (Hz).
@@ -303,6 +400,7 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
         chrom_attenuation: Attenuation factor for I/Q (color) channels.
             1.0 = full color amplification, 0.0 = luminance only.
     """
+    xp = _backend(video)[0]
     total_start = time.time()
     height, width = video.shape[1], video.shape[2]
     n_levels = pyramid_levels
@@ -311,6 +409,7 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     t0 = time.time()
     vid_pyramid = create_laplacian_video_pyramid(video, n_levels)
     del video  # free original; data is now in pyramid levels
+    _sync(xp)
     print(f"  Done in {format_duration(time.time() - t0)}")
 
     print("Filtering and amplifying...")
@@ -335,11 +434,13 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
         vid_pyramid[i] += filtered
         del filtered  # free memory immediately
 
+    _sync(xp)
     print(f"  Done in {format_duration(time.time() - t0)}")
 
     print("Reconstructing video from pyramid...")
     t0 = time.time()
     result = collapse_laplacian_video_pyramid(vid_pyramid)
+    _sync(xp)
     print(f"  Done in {format_duration(time.time() - t0)}")
 
     print(f"Total processing time: "
@@ -347,7 +448,55 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     return result
 
 
-def main():
+def estimate_vram_bytes(num_frames, height, width, pyramid_levels):
+    """Estimate peak GPU memory usage in bytes.
+
+    Peak occurs during FFT filtering: all pyramid levels are allocated,
+    plus one FFT buffer for the largest level being filtered. The input
+    video is freed before filtering starts.
+    """
+    bytes_per_pixel = 3 * 4  # 3 channels × float32
+
+    # Pyramid levels: each level is ~1/4 the previous
+    pyramid_bytes = 0
+    h, w = height, width
+    for _ in range(pyramid_levels):
+        pyramid_bytes += num_frames * h * w * bytes_per_pixel
+        h = h // 2
+        w = w // 2
+
+    # FFT buffer: complex64 for float32 input, on the largest filtered level
+    # (level 1, which is half resolution — level 0 is skipped)
+    fft_h, fft_w = height // 2, width // 2
+    fft_buffer = num_frames * fft_h * fft_w * 3 * 8  # complex64
+
+    return pyramid_bytes + fft_buffer
+
+
+def check_vram(num_frames, height, width, pyramid_levels, device_id):
+    """Check if GPU has enough VRAM. Exit with error if not."""
+    required = estimate_vram_bytes(num_frames, height, width, pyramid_levels)
+    import cupy
+    free, total = cupy.cuda.Device(device_id).mem_info
+
+    required_gb = required / (1024 ** 3)
+    free_gb = free / (1024 ** 3)
+    total_gb = total / (1024 ** 3)
+
+    print(f"  Estimated VRAM needed: {required_gb:.1f} GB")
+    print(f"  GPU VRAM available:    {free_gb:.1f} GB / {total_gb:.1f} GB")
+
+    if required > free:
+        print(
+            f"\nError: insufficient GPU memory. Need {required_gb:.1f} GB "
+            f"but only {free_gb:.1f} GB available.\n"
+            f"Try a shorter clip or lower resolution.",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Eulerian Video Magnification — amplify subtle temporal "
                     "variations in video.",
@@ -358,7 +507,8 @@ def main():
             "  python evm.py -i face.mp4 -o magnified.avi -a 50 "
             "-fl 0.83 -fh 1.0\n"
             "  python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 "
-            "--lambda-c 10 --chrom-attenuation 0"
+            "--lambda-c 10 --chrom-attenuation 0\n"
+            "  python evm.py -i face.mp4 --gpu --device 0"
         )
     )
     parser.add_argument(
@@ -407,7 +557,16 @@ def main():
              '0.0 = luminance only (default: 1.0)'
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        '--gpu', action='store_true',
+        help='Run on an NVIDIA GPU with CuPy (install requirements-cuda.txt)'
+    )
+    parser.add_argument(
+        '--device', type=int, default=0,
+        help='CUDA device ID for --gpu (default: 0)'
+    )
+
+    args = parser.parse_args(argv)
 
     # --- Validation ---
     if not os.path.isfile(args.input):
@@ -451,6 +610,26 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    # --- GPU setup ---
+    xp = np
+    if args.gpu:
+        try:
+            import cupy as xp
+        except ImportError:
+            print("Error: --gpu requires CuPy; install requirements-cuda.txt "
+                  "or use Dockerfile.cuda", file=sys.stderr)
+            sys.exit(1)
+        try:
+            xp.cuda.Device(args.device).use()
+            name = xp.cuda.runtime.getDeviceProperties(args.device)['name']
+        except xp.cuda.runtime.CUDARuntimeError:
+            print(f"Error: CUDA device {args.device} not available",
+                  file=sys.stderr)
+            sys.exit(1)
+        if isinstance(name, bytes):
+            name = name.decode('utf-8')
+        print(f"Using GPU: {name} (device {args.device})")
+
     # --- Default output path ---
     if args.output is None:
         base = os.path.splitext(args.input)[0]
@@ -473,12 +652,16 @@ def main():
     # --- Load video ---
     print(f"Loading {args.input}...")
     try:
-        video, fps = load_video(args.input, fps=args.fps)
+        frames, fps = read_frames(args.input, fps=args.fps)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    n_frames, height, width = video.shape[:3]
+    n_frames, height, width = frames.shape[:3]
     print(f"  {n_frames} frames, {width}x{height}, {fps} fps")
+    if args.gpu:
+        check_vram(n_frames, height, width, args.pyramid_levels, args.device)
+    video = frames_to_yiq(frames, xp)
+    del frames
 
     # --- Nyquist check ---
     nyquist = fps / 2.0

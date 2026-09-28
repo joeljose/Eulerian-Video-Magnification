@@ -17,8 +17,8 @@ WORKDIR /app
 COPY requirements-cuda.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-cuda.txt -r requirements-dev.txt
 
-COPY evm_cuda.py .
-COPY pyproject.toml .
+COPY evm.py evm_cuda.py ./
+COPY pyproject.toml VERSION ./
 COPY tests/ tests/
 
 RUN chown -R ${UID}:${GID} /app
@@ -28,4 +28,4 @@ LABEL version=${VERSION}
 
 USER ${UNAME}
 
-ENTRYPOINT ["python3", "-u", "evm_cuda.py"]
+ENTRYPOINT ["python3", "-u", "evm.py", "--gpu"]
