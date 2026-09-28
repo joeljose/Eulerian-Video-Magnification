@@ -184,7 +184,7 @@ class TestLoadVideoBufferGuard:
     """Verify load_video doesn't crash when CAP_PROP_FRAME_COUNT is wrong."""
 
     def test_frame_count_too_low(self):
-        """If reported frame_count < actual frames, should cap at reported count."""
+        """If reported frame_count < actual frames, all frames are still read."""
         actual_frames = 10
         reported_count = 5
         h, w = 8, 8
@@ -212,9 +212,77 @@ class TestLoadVideoBufferGuard:
         with patch("cv2.VideoCapture", return_value=mock_cap):
             video, fps = evm.load_video("fake_path.mp4")
 
-        # Should have exactly reported_count frames, not actual_frames
-        assert video.shape[0] == reported_count
+        assert video.shape[0] == actual_frames
         assert fps == 30.0
+
+    def test_unopenable_raises(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = False
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            with pytest.raises(ValueError, match="cannot open"):
+                evm.load_video("fake_path.mp4")
+
+    def test_zero_fps_raises(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FRAME_COUNT: 10,
+            cv2.CAP_PROP_FRAME_WIDTH: 8,
+            cv2.CAP_PROP_FRAME_HEIGHT: 8,
+            cv2.CAP_PROP_FPS: 0.0,
+        }[prop]
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            with pytest.raises(ValueError, match="frame rate"):
+                evm.load_video("fake_path.mp4")
+
+
+# ---------------------------------------------------------------------------
+# save_video must fail loudly
+# ---------------------------------------------------------------------------
+
+class TestSaveVideo:
+    def test_writer_not_opened_raises(self, tmp_path):
+        mock_writer = MagicMock()
+        mock_writer.isOpened.return_value = False
+        video = np.zeros((2, 8, 8, 3), dtype=np.float32)
+        with patch("cv2.VideoWriter", return_value=mock_writer):
+            with pytest.raises(RuntimeError, match="could not open"):
+                evm.save_video(video, 30.0, str(tmp_path / "out.avi"))
+
+    def test_roundtrip(self, tmp_path):
+        path = str(tmp_path / "out.avi")
+        video = np.full((5, 16, 16, 3), 0.5, dtype=np.float32)
+        evm.save_video(evm.rgb_to_yiq(video), 30.0, path)
+        loaded, fps = evm.load_video(path)
+        assert loaded.shape == (5, 16, 16, 3)
+        assert fps == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Passband resolution and per-level gains
+# ---------------------------------------------------------------------------
+
+class TestPassband:
+    def test_band_narrower_than_one_bin_raises(self):
+        data = np.zeros((301, 1, 1, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match="no frequency bins"):
+            evm.ideal_bandpass_filter(data, 30.0, 0.83, 0.85)
+
+    def test_passband_freqs(self):
+        bins = evm.passband_freqs(300, 30.0, 0.5, 1.0)
+        np.testing.assert_allclose(bins, [0.6, 0.7, 0.8, 0.9])
+
+
+class TestLevelAlphas:
+    def test_face_defaults(self):
+        # Pins current MATLAB-parity behaviour for face.mp4 (528x592) at the
+        # defaults; see issue #28 before changing.
+        alphas = evm.compute_level_alphas(592, 528, 4, 50, 1000)
+        np.testing.assert_allclose(alphas, [0, 4.74, 11.49, 0], atol=0.01)
+
+    def test_small_lambda_c_gives_full_alpha(self):
+        alphas = evm.compute_level_alphas(592, 528, 4, 50, 10)
+        assert alphas == [0.0, 50, 50, 0.0]
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +352,18 @@ class TestInputValidation:
         code, stderr = run_evm("-i", dummy_video, "--chrom-attenuation", "1.5")
         assert code == 1
         assert "--chrom-attenuation must be between" in stderr
+
+    def test_output_dir_missing(self, dummy_video, tmp_path):
+        out = str(tmp_path / "missing" / "out.avi")
+        code, stderr = run_evm("-i", dummy_video, "-o", out)
+        assert code == 1
+        assert "output directory does not exist" in stderr
+
+    def test_corrupt_input(self, dummy_video, tmp_path):
+        code, stderr = run_evm("-i", dummy_video, "-o", str(tmp_path / "o.avi"))
+        assert code == 1
+        assert "Traceback" not in stderr
+        assert "cannot open video" in stderr
 
     def test_chrom_attenuation_negative(self, dummy_video):
         code, stderr = run_evm("-i", dummy_video, "--chrom-attenuation", "-0.1")
