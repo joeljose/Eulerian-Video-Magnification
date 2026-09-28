@@ -16,10 +16,10 @@ import os
 import sys
 import time
 
-import cv2
 import cupy as cp
 import cupyx.scipy.fftpack
 import cupyx.scipy.ndimage
+import cv2
 import numpy as np
 
 # YIQ/NTSC color space conversion matrices (matches MATLAB rgb2ntsc/ntsc2rgb)
@@ -53,6 +53,61 @@ def format_duration(seconds):
     return f"{minutes}m {secs:.1f}s"
 
 
+def read_frames(path):
+    """Decode every frame of a video. Returns (uint8 BGR array, fps).
+
+    Reads until the decoder stops, not until CAP_PROP_FRAME_COUNT, because
+    that value is only a container estimate. Raises ValueError for
+    unreadable input, a missing frame rate, or fewer than 2 frames.
+    """
+    cap = cv2.VideoCapture(path)
+    try:
+        if not cap.isOpened():
+            raise ValueError(f"cannot open video: {path}")
+        reported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or not math.isfinite(fps) or fps <= 0:
+            raise ValueError(f"could not determine the frame rate of {path}")
+
+        # Preallocate from the reported count; frames past it go to a list
+        frames = np.empty((max(reported, 0), height, width, 3), dtype=np.uint8)
+        extra = []
+        i = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if i < len(frames):
+                frames[i] = frame
+            else:
+                extra.append(frame)
+            i += 1
+    finally:
+        cap.release()
+
+    frames = frames[:i]
+    if extra:
+        frames = np.concatenate([frames, np.stack(extra)])
+    if i != reported:
+        print(f"Warning: decoded {i} frames, container reported {reported}",
+              file=sys.stderr)
+    if i < 2:
+        raise ValueError(f"only {i} decodable frame(s) in {path}")
+    return frames, fps
+
+
+def frames_to_gpu_yiq(frames):
+    """Convert uint8 BGR frames to a GPU YIQ float32 array."""
+    rgb = frames[:, :, :, ::-1].astype(np.float32) / 255.0
+    rgb_gpu = cp.asarray(rgb)
+    del rgb
+    yiq = rgb_gpu @ _RGB_TO_YIQ.T
+    del rgb_gpu
+    return yiq
+
+
 def load_video(path):
     """Load a video file and return (GPU YIQ float32 array, fps).
 
@@ -60,37 +115,8 @@ def load_video(path):
     The returned array has shape (num_frames, height, width, 3) in YIQ
     color space with Y in [0, 1].
     """
-    cap = cv2.VideoCapture(path)
-    try:
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-
-        frames = np.zeros((frame_count, height, width, 3), dtype=np.uint8)
-        i = 0
-        while cap.isOpened():
-            if i >= frame_count:
-                break
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frames[i] = frame
-            i += 1
-    finally:
-        cap.release()
-
-    # Trim to actual frame count, convert BGR→RGB→float on CPU
-    frames = frames[:i]
-    rgb = frames[:, :, :, ::-1].astype(np.float32) / 255.0
-    del frames
-
-    # Transfer to GPU and convert to YIQ
-    rgb_gpu = cp.asarray(rgb)
-    del rgb
-    yiq = rgb_gpu @ _RGB_TO_YIQ.T
-    del rgb_gpu
-    return yiq, fps
+    frames, fps = read_frames(path)
+    return frames_to_gpu_yiq(frames), fps
 
 
 def save_video(video_yiq_gpu, fps, path):
@@ -105,6 +131,8 @@ def save_video(video_yiq_gpu, fps, path):
     fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     h, w = video_yiq.shape[1], video_yiq.shape[2]
     writer = cv2.VideoWriter(path, fourcc, fps, (w, h), True)
+    if not writer.isOpened():
+        raise RuntimeError(f"could not open video writer for {path} (MJPG)")
     try:
         for i in range(video_yiq.shape[0]):
             rgb = video_yiq[i] @ yiq_to_rgb.T
@@ -112,6 +140,8 @@ def save_video(video_yiq_gpu, fps, path):
             writer.write(bgr)
     finally:
         writer.release()
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        raise RuntimeError(f"video writer produced no output at {path}")
     print(f"Output saved to {path}")
 
 
@@ -206,12 +236,24 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
     return vid_pyramid
 
 
+def passband_freqs(n, fps, freq_low, freq_high):
+    """Return the FFT bin frequencies that the ideal filter keeps."""
+    freqs = np.arange(n) / n * fps
+    return freqs[(freqs > freq_low) & (freqs < freq_high)]
+
+
 def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     """Apply ideal bandpass filter along the time axis on GPU.
 
     Uses CuPy's FFT (backed by cuFFT) for GPU-accelerated filtering.
+    Raises ValueError if no frequency bin falls inside the band.
     """
     n = data.shape[0]
+    if len(passband_freqs(n, fps, freq_low, freq_high)) == 0:
+        raise ValueError(
+            f"band {freq_low}-{freq_high} Hz contains no frequency bins "
+            f"(resolution {fps / n:.3f} Hz for {n} frames at {fps} fps)"
+        )
     freqs = cp.arange(n) / n * fps
     mask = ((freqs > freq_low) & (freqs < freq_high)).astype(cp.float64)
     mask = mask.reshape([n] + [1] * (data.ndim - 1))
@@ -239,6 +281,34 @@ def collapse_laplacian_video_pyramid(pyramid):
     return pyramid[0]
 
 
+def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
+    """Per-level amplification, finest level first (MATLAB reference, Fig. 6).
+
+    Levels whose representative wavelength is short relative to lambda_c
+    get less than alpha, so a larger lambda_c means weaker amplification.
+    """
+    delta = lambda_c / 8.0 / (1.0 + alpha)
+    exaggeration_factor = 2.0
+
+    # Representative wavelength for the coarsest level
+    lv = math.sqrt(height ** 2 + width ** 2) / 3.0
+
+    # Compute per-level alpha from coarsest to finest
+    level_alphas = [0.0] * pyramid_levels
+    for i in range(pyramid_levels - 1, -1, -1):
+        curr_alpha = (lv / delta / 8.0 - 1.0) * exaggeration_factor
+        if i == pyramid_levels - 1 or i == 0:
+            # Level 0 (finest): spatial wavelengths too short, amplification
+            # would break the Taylor approximation -> artifacts.
+            # Coarsest level: low-pass residual (DC/mean), not a bandpass
+            # level, amplifying it shifts global brightness.
+            level_alphas[i] = 0.0
+        else:
+            level_alphas[i] = min(curr_alpha, alpha)
+        lv /= 2.0
+    return level_alphas
+
+
 def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
                            pyramid_levels=4, lambda_c=1000,
                            chrom_attenuation=1.0):
@@ -257,23 +327,8 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     print("Filtering and amplifying (GPU)...")
     t0 = time.time()
 
-    # Adaptive per-level amplification (matches MATLAB reference, Figure 6)
-    delta = lambda_c / 8.0 / (1.0 + alpha)
-    exaggeration_factor = 2.0
-
-    lambda_val = math.sqrt(height ** 2 + width ** 2) / 3.0
-
-    level_alphas = [0.0] * n_levels
-    lv = lambda_val
-    for i in range(n_levels - 1, -1, -1):
-        curr_alpha = (lv / delta / 8.0 - 1.0) * exaggeration_factor
-        if i == n_levels - 1 or i == 0:
-            level_alphas[i] = 0.0
-        elif curr_alpha > alpha:
-            level_alphas[i] = alpha
-        else:
-            level_alphas[i] = curr_alpha
-        lv /= 2.0
+    level_alphas = compute_level_alphas(height, width, n_levels, alpha,
+                                        lambda_c)
 
     for i in range(n_levels):
         if level_alphas[i] == 0.0:
@@ -394,9 +449,10 @@ def main():
     )
     parser.add_argument(
         '--lambda-c', type=float, default=1000,
-        help='Cutoff spatial wavelength for adaptive amplification '
-             '(default: 1000). Lower values reduce amplification at '
-             'finer spatial scales (see paper Figure 6).'
+        help='Cutoff spatial wavelength in pixels (default: 1000). '
+             'Structures smaller than this get reduced amplification, '
+             'so lower values give stronger amplification '
+             '(see paper Figure 6).'
     )
     parser.add_argument(
         '--chrom-attenuation', type=float, default=1.0,
@@ -462,23 +518,37 @@ def main():
         base = os.path.splitext(args.input)[0]
         args.output = f"{base}_magnified.avi"
 
+    # --- Check the output location before doing any work ---
+    out_dir = os.path.dirname(os.path.abspath(args.output))
+    if not os.path.isdir(out_dir):
+        print(f"Error: output directory does not exist: {out_dir}",
+              file=sys.stderr)
+        sys.exit(1)
+    if not os.access(out_dir, os.W_OK):
+        print(f"Error: output directory is not writable: {out_dir}",
+              file=sys.stderr)
+        sys.exit(1)
+    if not args.output.lower().endswith('.avi'):
+        print("Warning: output is always MJPG; use a .avi extension",
+              file=sys.stderr)
+
     # --- Load video (CPU) ---
     print(f"Loading {args.input}...")
-    cap = cv2.VideoCapture(args.input)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
+    try:
+        frames, fps = read_frames(args.input)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    n_frames, height, width = frames.shape[:3]
+    print(f"  {n_frames} frames, {width}x{height}, {fps} fps")
 
-    print(f"  {frame_count} frames, {width}x{height}, {fps} fps")
+    # --- VRAM check (with the decoded frame count) ---
+    check_vram(n_frames, height, width, args.pyramid_levels, args.device)
 
-    # --- VRAM check ---
-    check_vram(frame_count, height, width, args.pyramid_levels, args.device)
-
-    # --- Load and transfer to GPU ---
-    video, fps = load_video(args.input)
-    print("  Loaded and transferred to GPU")
+    # --- Transfer to GPU ---
+    video = frames_to_gpu_yiq(frames)
+    del frames
+    print("  Transferred to GPU")
 
     # --- Nyquist warning ---
     nyquist = fps / 2.0
@@ -487,10 +557,31 @@ def main():
               f"frequency ({nyquist} Hz) for this video's frame rate ({fps} "
               f"fps). Results may be unreliable.", file=sys.stderr)
 
+    # --- Effective band ---
+    bins = passband_freqs(n_frames, fps, args.freq_low, args.freq_high)
+    resolution = fps / n_frames
+    if len(bins) == 0:
+        print(f"Error: band {args.freq_low}–{args.freq_high} Hz contains no "
+              f"frequency bins (resolution {resolution:.3f} Hz for "
+              f"{n_frames} frames at {fps} fps). Widen the band or use a "
+              f"longer clip.", file=sys.stderr)
+        sys.exit(1)
+    if len(bins) < 3:
+        print(f"Warning: only {len(bins)} frequency bin(s) in the band; "
+              f"consider a wider band or a longer clip.", file=sys.stderr)
+
+    level_alphas = compute_level_alphas(height, width, args.pyramid_levels,
+                                        args.amplification, args.lambda_c)
+
     # --- Run ---
     print("\nParameters:")
-    print(f"  Frequency band:      {args.freq_low}–{args.freq_high} Hz")
+    print(f"  Frequency band:      {args.freq_low}–{args.freq_high} Hz "
+          f"({len(bins)} bins, {bins[0]:.3f}–{bins[-1]:.3f} Hz, "
+          f"Δf={resolution:.3f} Hz)")
     print(f"  Amplification:       {args.amplification}x")
+    print(f"  Level gains:         "
+          f"[{', '.join(f'{a:.2f}' for a in level_alphas)}] "
+          f"(x0.5 from one-sided filter)")
     print(f"  Pyramid levels:      {args.pyramid_levels}")
     print(f"  Lambda_c:            {args.lambda_c}")
     print(f"  Chrom attenuation:   {args.chrom_attenuation}\n")
@@ -507,7 +598,11 @@ def main():
 
     # --- Save (transfer back to CPU) ---
     print("Transferring result to CPU and saving...")
-    save_video(result, fps, args.output)
+    try:
+        save_video(result, fps, args.output)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

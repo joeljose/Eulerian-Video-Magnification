@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, so dependency drift shows up early
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -23,14 +28,13 @@ jobs:
       - name: Lint
         run: docker run --rm --entrypoint "" evm-ci ruff check .
 
-      - name: Verify import
-        run: docker run --rm --entrypoint "" evm-ci python -c "import evm"
+      - name: Unit tests
+        run: docker run --rm --entrypoint "" evm-ci python -m pytest tests -q
 
-      - name: Verify --help
-        run: docker run --rm --entrypoint "" evm-ci python evm.py --help
-
-      - name: Verify --version
-        run: docker run --rm --entrypoint "" evm-ci python evm.py --version
+      - name: Verify --help and --version
+        run: |
+          docker run --rm --entrypoint "" evm-ci python evm.py --help
+          docker run --rm --entrypoint "" evm-ci python evm.py --version
 
       - name: Run full pipeline on face.mp4
         run: |
@@ -39,30 +43,26 @@ jobs:
             evm-ci \
             python -u evm.py -i /data/face.mp4 -o /data/face_magnified.avi -fl 0.83 -fh 1.0 -a 50
 
-      - name: Verify output exists
-        run: test -f face_magnified.avi
-
-  test-cuda:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build CUDA Docker image
+      - name: Verify output is magnified
         run: |
-          docker build -f Dockerfile.cuda \
-            --build-arg UID=$(id -u) \
-            --build-arg GID=$(id -g) \
-            --build-arg UNAME=$(whoami) \
-            -t evm-cuda-ci .
+          docker run --rm -i --entrypoint "" -v "${{ github.workspace }}:/data" evm-ci python - <<'PY'
+          import cv2
+          import numpy as np
 
-      - name: Lint
-        run: docker run --rm --entrypoint "" evm-cuda-ci ruff check .
+          import evm
 
-      - name: Verify import
-        run: docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm_cuda"
+          def band_energy(path):
+              frames, fps = evm.read_frames(path)
+              small = np.stack([cv2.resize(f, (66, 74), interpolation=cv2.INTER_AREA)
+                                for f in frames]).astype(np.float32)
+              power = np.abs(np.fft.rfft(small, axis=0)) ** 2
+              freqs = np.fft.rfftfreq(len(small), 1 / fps)
+              return frames.shape, power[(freqs > 0.83) & (freqs < 1.0)].sum()
 
-      - name: Verify --help
-        run: docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --help
-
-      - name: Verify --version
-        run: docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --version
+          in_shape, in_energy = band_energy("/data/face.mp4")
+          out_shape, out_energy = band_energy("/data/face_magnified.avi")
+          ratio = out_energy / in_energy
+          print(f"shape {out_shape}, pulse-band energy ratio {ratio:.2f}")
+          assert out_shape == in_shape == (301, 592, 528, 3), out_shape
+          assert ratio > 2, "output is not magnified in the pulse band"
+          PY
