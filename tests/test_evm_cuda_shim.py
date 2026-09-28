@@ -89,7 +89,7 @@ def test_level_alphas_match_cpu():
 def test_filter_raises_on_empty_band():
     data = np.zeros((301, 1, 1, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="no frequency bins"):
-        evm_cuda.ideal_bandpass_filter(data, 30.0, 0.83, 0.85)
+        evm_cuda.ideal_bandpass_filter(data, 30.0, 0.83, 0.84)
 
 
 def test_save_video_raises_when_writer_not_opened(tmp_path):

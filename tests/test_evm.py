@@ -266,11 +266,54 @@ class TestPassband:
     def test_band_narrower_than_one_bin_raises(self):
         data = np.zeros((301, 1, 1, 3), dtype=np.float32)
         with pytest.raises(ValueError, match="no frequency bins"):
-            evm.ideal_bandpass_filter(data, 30.0, 0.83, 0.85)
+            evm.ideal_bandpass_filter(data, 30.0, 0.83, 0.84)
 
     def test_passband_freqs(self):
+        # 2n-point grid: bins 0.05 Hz apart for 300 frames at 30 fps
         bins = evm.passband_freqs(300, 30.0, 0.5, 1.0)
-        np.testing.assert_allclose(bins, [0.6, 0.7, 0.8, 0.9])
+        np.testing.assert_allclose(bins, np.arange(0.55, 0.96, 0.05))
+
+
+class TestDrift:
+    def test_slow_drift_does_not_become_flicker(self):
+        """A linear drift has no in-band content. Without the mirrored
+        extension the FFT joins the last frame to the first, and the jump
+        leaks into the band (issue #36)."""
+        n = 300
+        drift = (np.arange(n) / n).astype(np.float32).reshape(n, 1, 1, 1)
+        out = evm.ideal_bandpass_filter(drift, 30.0, 0.5, 3.0)
+        assert np.abs(out).max() < 0.02
+
+
+class TestRounding:
+    def test_save_video_rounds_to_nearest(self, tmp_path):
+        written = []
+        mock_writer = MagicMock()
+        mock_writer.isOpened.return_value = True
+        mock_writer.write.side_effect = lambda f: written.append(f.copy())
+        rgb = np.full((1, 2, 2, 3), 100.6 / 255, dtype=np.float32)
+        path = tmp_path / "out.avi"
+        path.write_bytes(b"x")  # the writer is mocked, so fake its output
+        with patch("cv2.VideoWriter", return_value=mock_writer):
+            evm.save_video(evm.rgb_to_yiq(rgb), 30.0, str(path))
+        assert written[0].min() == 101
+
+
+class TestFpsOverride:
+    def test_fps_argument_replaces_missing_frame_rate(self):
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda prop: {
+            cv2.CAP_PROP_FRAME_COUNT: 3,
+            cv2.CAP_PROP_FRAME_WIDTH: 4,
+            cv2.CAP_PROP_FRAME_HEIGHT: 4,
+            cv2.CAP_PROP_FPS: 0.0,
+        }[prop]
+        frames = iter([(True, np.zeros((4, 4, 3), np.uint8))] * 3)
+        mock_cap.read.side_effect = lambda: next(frames, (False, None))
+        with patch("cv2.VideoCapture", return_value=mock_cap):
+            video, fps = evm.load_video("fake.mp4", fps=25.0)
+        assert fps == 25.0 and video.shape[0] == 3
 
 
 class TestLevelAlphas:
@@ -352,6 +395,20 @@ class TestInputValidation:
         code, stderr = run_evm("-i", dummy_video, "--chrom-attenuation", "1.5")
         assert code == 1
         assert "--chrom-attenuation must be between" in stderr
+
+    @pytest.mark.parametrize("flag", ["-a", "-fl", "-fh", "--lambda-c", "--fps"])
+    @pytest.mark.parametrize("value", ["nan", "inf"])
+    def test_non_finite_values(self, dummy_video, flag, value):
+        code, stderr = run_evm("-i", dummy_video, flag, value)
+        assert code == 1
+        assert "must be a finite number" in stderr
+
+    def test_freq_high_above_nyquist(self, tmp_path):
+        clip = str(tmp_path / "clip.avi")
+        evm.save_video(np.zeros((10, 16, 16, 3), np.float32), 30.0, clip)
+        code, stderr = run_evm("-i", clip, "-fl", "1", "-fh", "20")
+        assert code == 1
+        assert "Nyquist" in stderr
 
     def test_output_dir_missing(self, dummy_video, tmp_path):
         out = str(tmp_path / "missing" / "out.avi")

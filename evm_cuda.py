@@ -17,7 +17,6 @@ import sys
 import time
 
 import cupy as cp
-import cupyx.scipy.fftpack
 import cupyx.scipy.ndimage
 import cv2
 import numpy as np
@@ -53,12 +52,13 @@ def format_duration(seconds):
     return f"{minutes}m {secs:.1f}s"
 
 
-def read_frames(path):
+def read_frames(path, fps=None):
     """Decode every frame of a video. Returns (uint8 BGR array, fps).
 
     Reads until the decoder stops, not until CAP_PROP_FRAME_COUNT, because
-    that value is only a container estimate. Raises ValueError for
-    unreadable input, a missing frame rate, or fewer than 2 frames.
+    that value is only a container estimate. `fps` overrides the
+    container's frame rate. Raises ValueError for unreadable input, a
+    missing frame rate, or fewer than 2 frames.
     """
     cap = cv2.VideoCapture(path)
     try:
@@ -67,9 +67,11 @@ def read_frames(path):
         reported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps is None:
+            fps = cap.get(cv2.CAP_PROP_FPS)
         if not fps or not math.isfinite(fps) or fps <= 0:
-            raise ValueError(f"could not determine the frame rate of {path}")
+            raise ValueError(f"could not determine the frame rate of {path}; "
+                             f"pass --fps")
 
         # Preallocate from the reported count; frames past it go to a list
         frames = np.empty((max(reported, 0), height, width, 3), dtype=np.uint8)
@@ -108,14 +110,14 @@ def frames_to_gpu_yiq(frames):
     return yiq
 
 
-def load_video(path):
+def load_video(path, fps=None):
     """Load a video file and return (GPU YIQ float32 array, fps).
 
     Loads via OpenCV on CPU, converts to YIQ, then transfers to GPU once.
     The returned array has shape (num_frames, height, width, 3) in YIQ
     color space with Y in [0, 1].
     """
-    frames, fps = read_frames(path)
+    frames, fps = read_frames(path, fps)
     return frames_to_gpu_yiq(frames), fps
 
 
@@ -136,7 +138,7 @@ def save_video(video_yiq_gpu, fps, path):
     try:
         for i in range(video_yiq.shape[0]):
             rgb = video_yiq[i] @ yiq_to_rgb.T
-            bgr = np.clip(rgb[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
+            bgr = np.clip(np.rint(rgb[:, :, ::-1] * 255), 0, 255).astype(np.uint8)
             writer.write(bgr)
     finally:
         writer.release()
@@ -237,8 +239,13 @@ def create_laplacian_video_pyramid(video, pyramid_levels):
 
 
 def passband_freqs(n, fps, freq_low, freq_high):
-    """Return the FFT bin frequencies that the ideal filter keeps."""
-    freqs = np.arange(n) / n * fps
+    """Return the FFT bin frequencies that the ideal filter keeps.
+
+    The filter transforms the clip extended to 2n frames (see
+    ideal_bandpass_filter), so bins are fps / (2n) apart. The real frequency
+    resolution of an n-frame clip is still fps / n.
+    """
+    freqs = np.fft.rfftfreq(2 * n, 1.0 / fps)
     return freqs[(freqs > freq_low) & (freqs < freq_high)]
 
 
@@ -246,22 +253,32 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     """Apply ideal bandpass filter along the time axis on GPU.
 
     Uses CuPy's FFT (backed by cuFFT) for GPU-accelerated filtering.
+    The clip is extended with its time-reversed copy before the FFT, so the
+    transform sees a seamless loop instead of joining the last frame to the
+    first; slow drift over the clip no longer turns into amplified flicker.
+
     Raises ValueError if no frequency bin falls inside the band.
     """
     n = data.shape[0]
-    if len(passband_freqs(n, fps, freq_low, freq_high)) == 0:
+    freqs = np.fft.rfftfreq(2 * n, 1.0 / fps)
+    keep = (freqs > freq_low) & (freqs < freq_high)
+    if not keep.any():
         raise ValueError(
             f"band {freq_low}-{freq_high} Hz contains no frequency bins "
             f"(resolution {fps / n:.3f} Hz for {n} frames at {fps} fps)"
         )
-    freqs = cp.arange(n) / n * fps
-    mask = ((freqs > freq_low) & (freqs < freq_high)).astype(cp.float64)
-    mask = mask.reshape([n] + [1] * (data.ndim - 1))
+    mask = cp.asarray(keep.reshape([len(keep)] + [1] * (data.ndim - 1)))
 
-    fft = cupyx.scipy.fftpack.fft(data, axis=0)
-    fft *= mask
+    # Clip followed by its time reverse: a seamless loop for the FFT
+    extended = cp.concatenate([data, data[::-1]], axis=0)
+    spectrum = cp.fft.rfft(extended, axis=0)
+    del extended
+    spectrum *= mask
+    filtered = cp.fft.irfft(spectrum, 2 * n, axis=0)[:n]
 
-    return cp.real(cupyx.scipy.fftpack.ifft(fft, axis=0)).astype(cp.float32)
+    # x0.5: the reference keeps positive frequencies only, which halves the
+    # in-band signal. Kept for MATLAB parity; see issue #28.
+    return (0.5 * filtered).astype(cp.float32)
 
 
 def collapse_laplacian_pyramid(image_pyramid):
@@ -304,7 +321,8 @@ def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
             # level, amplifying it shifts global brightness.
             level_alphas[i] = 0.0
         else:
-            level_alphas[i] = min(curr_alpha, alpha)
+            # Clamp at 0: a negative gain would shrink or invert motion
+            level_alphas[i] = max(0.0, min(curr_alpha, alpha))
         lv /= 2.0
     return level_alphas
 
@@ -455,6 +473,10 @@ def main():
              '(see paper Figure 6).'
     )
     parser.add_argument(
+        '--fps', type=float, default=None,
+        help='Frame rate of the input (default: read from the video)'
+    )
+    parser.add_argument(
         '--chrom-attenuation', type=float, default=1.0,
         help='Attenuation for color (I/Q) channels. '
              '1.0 = full color amplification, '
@@ -470,6 +492,17 @@ def main():
     # --- Validation ---
     if not os.path.isfile(args.input):
         print(f"Error: input file not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    for name in ('freq_low', 'freq_high', 'amplification', 'lambda_c',
+                 'chrom_attenuation', 'fps'):
+        value = getattr(args, name)
+        if value is not None and not math.isfinite(value):
+            print(f"Error: --{name.replace('_', '-')} must be a finite number",
+                  file=sys.stderr)
+            sys.exit(1)
+    if args.fps is not None and args.fps <= 0:
+        print("Error: --fps must be positive", file=sys.stderr)
         sys.exit(1)
 
     if args.freq_low <= 0:
@@ -535,7 +568,7 @@ def main():
     # --- Load video (CPU) ---
     print(f"Loading {args.input}...")
     try:
-        frames, fps = read_frames(args.input)
+        frames, fps = read_frames(args.input, fps=args.fps)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -550,12 +583,12 @@ def main():
     del frames
     print("  Transferred to GPU")
 
-    # --- Nyquist warning ---
+    # --- Nyquist check ---
     nyquist = fps / 2.0
     if args.freq_high > nyquist:
-        print(f"Warning: --freq-high ({args.freq_high} Hz) exceeds Nyquist "
-              f"frequency ({nyquist} Hz) for this video's frame rate ({fps} "
-              f"fps). Results may be unreliable.", file=sys.stderr)
+        print(f"Error: --freq-high ({args.freq_high} Hz) exceeds the Nyquist "
+              f"frequency ({nyquist} Hz) at {fps} fps", file=sys.stderr)
+        sys.exit(1)
 
     # --- Effective band ---
     bins = passband_freqs(n_frames, fps, args.freq_low, args.freq_high)
@@ -566,9 +599,10 @@ def main():
               f"{n_frames} frames at {fps} fps). Widen the band or use a "
               f"longer clip.", file=sys.stderr)
         sys.exit(1)
-    if len(bins) < 3:
-        print(f"Warning: only {len(bins)} frequency bin(s) in the band; "
-              f"consider a wider band or a longer clip.", file=sys.stderr)
+    if args.freq_high - args.freq_low < resolution:
+        print(f"Warning: the band is narrower than the clip's frequency "
+              f"resolution ({resolution:.3f} Hz); consider a wider band or a "
+              f"longer clip.", file=sys.stderr)
 
     level_alphas = compute_level_alphas(height, width, args.pyramid_levels,
                                         args.amplification, args.lambda_c)
