@@ -16,10 +16,10 @@ import os
 import sys
 import time
 
-import cv2
 import cupy as cp
 import cupyx.scipy.fftpack
 import cupyx.scipy.ndimage
+import cv2
 import numpy as np
 
 # YIQ/NTSC color space conversion matrices (matches MATLAB rgb2ntsc/ntsc2rgb)

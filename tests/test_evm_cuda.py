@@ -3,8 +3,8 @@
 Requires CuPy and an NVIDIA GPU. Run via: ./test.sh gpu
 """
 
-import sys
 import os
+import sys
 
 import numpy as np
 import pytest

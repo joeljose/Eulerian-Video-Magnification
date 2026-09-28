@@ -1,8 +1,8 @@
 """Unit tests for evm.py — CPU Eulerian Video Magnification."""
 
+import os
 import subprocess
 import sys
-import os
 from unittest.mock import MagicMock, patch
 
 import cv2
@@ -12,7 +12,6 @@ import pytest
 # Add project root to path so we can import evm
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import evm
-
 
 # ---------------------------------------------------------------------------
 # Helpers
