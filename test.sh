@@ -7,7 +7,7 @@ case "$MODE" in
     cpu)
         IMAGE="evm-dev"
         DOCKERFILE="Dockerfile"
-        TEST_FILE="tests/test_evm.py"
+        TEST_FILE="tests"
         ;;
     gpu)
         IMAGE="evm-cuda-dev"
@@ -18,7 +18,7 @@ case "$MODE" in
         # ./test.sh --build  → force rebuild CPU image then test
         IMAGE="evm-dev"
         DOCKERFILE="Dockerfile"
-        TEST_FILE="tests/test_evm.py"
+        TEST_FILE="tests"
         docker build \
             --build-arg UID="$(id -u)" \
             --build-arg GID="$(id -g)" \

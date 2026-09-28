@@ -257,7 +257,7 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `-fh / --freq-high` | 2.0 | Upper cutoff frequency (Hz) |
 | `-a / --amplification` | 50 | Amplification factor (alpha) |
 | `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
-| `--lambda-c` | 1000 | Cutoff spatial wavelength (see paper Figure 6) |
+| `--lambda-c` | 1000 | Cutoff spatial wavelength in pixels (paper Figure 6). Structures smaller than this get reduced amplification, so **lower = stronger amplification**. The effective per-level gains are printed at startup. |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 | `--version` | — | Show program version and exit |
 
@@ -314,8 +314,12 @@ All tests run inside Docker — no local Python dependencies needed. Build the t
 - Color conversion roundtrip (YIQ ↔ RGB)
 - Bandpass filter (passband, rejection, DC)
 - Laplacian pyramid (reconstruction roundtrip, shapes, finite values)
-- `load_video` buffer safety
+- `load_video` error handling (unreadable input, fps 0, under-reported frame count)
+- `save_video` failing loudly when the writer cannot open
+- Empty frequency bands and per-level gains
 - All CLI input validation error paths
+
+**CUDA shim tests** (`tests/test_evm_cuda_shim.py`) run `evm_cuda.py` on the CPU with numpy/scipy standing in for CuPy, so the GPU pipeline logic is tested without a GPU. They also check that both pipelines amplify an in-band signal.
 
 **GPU tests** (`tests/test_evm_cuda.py`) cover:
 - VRAM estimation
@@ -327,7 +331,7 @@ All tests run inside Docker — no local Python dependencies needed. Build the t
 1. Make your changes
 2. Run `./test.sh` (or `./test.sh gpu` for CUDA changes)
 3. If all tests pass, commit and open a PR
-4. CI runs lint + smoke tests automatically
+4. CI runs lint, the unit tests, and a full pipeline run that checks the output is magnified
 
 ### Versioning
 
@@ -356,10 +360,12 @@ docker-build-cuda.sh    # Build + tag GPU image
 test.sh                 # Run unit tests (cpu/gpu)
 requirements.txt        # CPU runtime dependencies
 requirements-cuda.txt   # GPU runtime dependencies
-requirements-dev.txt    # Dev dependencies (pytest, ruff)
+requirements-dev.txt    # Dev dependencies (pytest, ruff), pinned exactly
+pyproject.toml          # ruff configuration
 tests/
   test_evm.py           # CPU unit tests
   test_evm_cuda.py      # GPU unit tests
+  test_evm_cuda_shim.py # CUDA pipeline tests on CPU (no GPU needed)
 docs/design/            # Architecture decision records
 VERSION                 # Single source of truth for version
 CHANGELOG.md            # Release history

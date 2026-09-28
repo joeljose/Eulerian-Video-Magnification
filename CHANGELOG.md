@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- A failed save no longer prints "Output saved" and exits 0; the output directory is checked before processing (#30)
+- Unreadable input, fps of 0 and clips with fewer than 2 frames give a clear error instead of a traceback (#31)
+- Frames past an under-reported `CAP_PROP_FRAME_COUNT` are no longer dropped (#31)
+- The CUDA tool runs its VRAM check with the decoded frame count and opens the input once (#31)
+- A frequency band that contains no FFT bins is now an error instead of silently returning the input (#29)
+- `--lambda-c` help and docs described its effect backwards: lower values give stronger amplification (#28)
+
+### Added
+- The effective frequency band, bin count and per-level gains are printed at startup (#28, #29)
+- CI runs the unit tests, checks that the output is magnified, and runs `evm_cuda.py` on the CPU through a CuPy shim (#34)
+
+### Changed
+- ruff and pytest are pinned exactly, with the rule set in `pyproject.toml` (#33)
+- The CUDA image is only built in CI when its inputs change (#34)
+
 ## [2.1.0] - 2026-03-20
 
 ### Added

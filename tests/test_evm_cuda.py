@@ -9,12 +9,11 @@ import sys
 import numpy as np
 import pytest
 
-# Add project root to path so we can import evm_cuda
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import evm_cuda
-
 cp = pytest.importorskip("cupy")
 
+# Add project root to path so we can import evm_cuda
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import evm_cuda  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # VRAM estimation (pure math — no GPU needed, but lives in evm_cuda)
