@@ -408,7 +408,7 @@ def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
     print("Building Laplacian video pyramid...")
     t0 = time.time()
     vid_pyramid = create_laplacian_video_pyramid(video, n_levels)
-    del video  # free original; data is now in pyramid levels
+    del video  # the caller may still hold the input; see issue #32
     _sync(xp)
     print(f"  Done in {format_duration(time.time() - t0)}")
 
