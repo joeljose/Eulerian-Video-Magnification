@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
 COPY evm.py evm_cuda.py ./
 COPY pyproject.toml .
 COPY tests/ tests/
+COPY scripts/ scripts/
 
 RUN chown -R ${UID}:${GID} /app
 
