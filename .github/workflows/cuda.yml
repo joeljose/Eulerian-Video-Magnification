@@ -5,10 +5,10 @@ name: CUDA image
 on:
   push:
     branches: [main]
-    paths: [Dockerfile.cuda, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
+    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
   pull_request:
     branches: [main]
-    paths: [Dockerfile.cuda, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
+    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
 
 permissions:
   contents: read
@@ -29,6 +29,6 @@ jobs:
 
       - name: Verify import, --help and --version
         run: |
-          docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm_cuda"
-          docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --help
+          docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm, cupy"
+          docker run --rm --entrypoint "" evm-cuda-ci python3 evm.py --help
           docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --version

@@ -236,7 +236,7 @@ docker run --gpus all --rm \
     -i /data/input.mp4 -o /data/output.avi --device 1
 ```
 
-The GPU version runs the entire EVM pipeline on GPU using CuPy (backed by cuFFT). It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
+The image runs `evm.py --gpu`: the same code as the CPU version, on CuPy arrays (backed by cuFFT). The CPU and GPU give the same result to float precision. It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
 
 **VRAM requirements:** Depends on video resolution and length. The tool prints exact requirements before starting. As a rough guide: a 300-frame 264x296 video needs ~0.5 GB, a 1080p 30s video at 30fps needs ~4-5 GB.
 
@@ -265,21 +265,26 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--fps` | *(from video)* | Frame rate of the input, for files that don't report one |
 | `--version` | — | Show program version and exit |
 
-### GPU CLI Tool
+### GPU
 
-Same flags as the CPU version, plus `--device`. The recommended way to run is via Docker (see [GPU setup](#d-gpu-cuda) above). If running outside Docker:
+Add `--gpu` to run on an NVIDIA GPU. The recommended way is via Docker (see [GPU setup](#d-gpu-cuda) above). If running outside Docker:
 
 ```bash
-pip install -r requirements-cuda.txt
-python evm_cuda.py -i face.mp4
-python evm_cuda.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --device 0
+pip install -r requirements-cuda.txt     # or: pip install .[cuda]
+python evm.py -i face.mp4 --gpu
+python evm.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --gpu --device 0
 ```
 
-| Additional Flag | Default | Description |
+| GPU Flag | Default | Description |
 |---|---|---|
+| `--gpu` | off | Run on an NVIDIA GPU with CuPy |
 | `--device` | 0 | CUDA device ID (for multi-GPU systems) |
 
-The tool prints the GPU name, estimated VRAM usage, and available memory before processing.
+The tool prints the GPU name, estimated VRAM usage, and available memory before processing. `python evm_cuda.py …` still works for one release; it runs `evm.py --gpu`.
+
+### Installing as a package
+
+`pip install .` (or `pip install .[cuda]` for the GPU) installs an `evm` command, and `import evm` gives the functions (`load_video`, `eulerian_magnification`, `save_video`, …). The pipeline functions accept NumPy or CuPy arrays.
 
 ### Notebook
 
@@ -337,13 +342,13 @@ All tests run inside Docker — no local Python dependencies needed. Build the t
 - Empty frequency bands and per-level gains
 - All CLI input validation error paths
 
-**CUDA shim tests** (`tests/test_evm_cuda_shim.py`) run `evm_cuda.py` on the CPU with numpy/scipy standing in for CuPy, so the GPU pipeline logic is tested without a GPU. They also check that both pipelines amplify an in-band signal.
+**CUDA shim tests** (`tests/test_evm_cuda_shim.py`) run the GPU branch of `evm.py` on the CPU with a fake `cupy` (NumPy/SciPy underneath), so the GPU code path, `--gpu` setup and VRAM check are tested without a GPU; the result must equal the CPU result.
 
-**GPU tests** (`tests/test_evm_cuda.py`) cover:
-- VRAM estimation
+**GPU tests** (`tests/test_evm_cuda.py`, real CuPy) cover:
 - GPU color conversion roundtrip
-- GPU pyramid operations (pyrDown/pyrUp shapes, finite values)
+- GPU pyramid operations against OpenCV (to 1e-5, odd sizes too)
 - GPU bandpass filter
+- CPU vs GPU end to end (PSNR ≥ 60 dB)
 
 **Dev workflow:**
 1. Make your changes
@@ -353,24 +358,24 @@ All tests run inside Docker — no local Python dependencies needed. Build the t
 
 ### Versioning
 
-Version is tracked in a `VERSION` file at the project root. Both `evm.py` and `evm_cuda.py` have `__version__` baked into the source (updated at release time).
+Version is tracked in a `VERSION` file at the project root, and `evm.py` has `__version__` baked into the source (updated at release time; a test checks they match). `pyproject.toml` reads the version from `evm.py`.
 
 **To cut a release:**
 1. Update `VERSION` with the new version number
-2. Update `__version__` in `evm.py` (e.g., `"2.1.0"`) and `evm_cuda.py` (e.g., `"2.1.0-cuda"`)
+2. Update `__version__` in `evm.py` (e.g., `"2.1.0"`)
 3. Update `CHANGELOG.md` — move items from `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`
 4. Commit: `Release vX.Y.Z`
 5. Tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 6. Push: `git push && git push origin vX.Y.Z`
 7. Rebuild Docker images: `./docker-build.sh` and `./docker-build-cuda.sh`
 
-Docker build scripts read from `VERSION` and tag images accordingly (e.g., `evm:2.1.0`, `evm-cuda:2.1.0-cuda`). Images also carry a `version` label visible via `docker inspect`.
+Docker build scripts read from `VERSION` and tag images accordingly (e.g., `evm:2.1.0`, `evm-cuda:2.1.0`). Images also carry a `version` label visible via `docker inspect`.
 
 ### Project Structure
 
 ```
-evm.py                  # CPU CLI tool
-evm_cuda.py             # GPU CLI tool (CuPy/CUDA)
+evm.py                  # CLI tool and library (CPU, or GPU with --gpu)
+evm_cuda.py             # Deprecated: runs evm.py --gpu
 Dockerfile              # CPU Docker image
 Dockerfile.cuda         # GPU Docker image
 docker-build.sh         # Build + tag CPU image
@@ -379,11 +384,11 @@ test.sh                 # Run unit tests (cpu/gpu)
 requirements.txt        # CPU runtime dependencies
 requirements-cuda.txt   # GPU runtime dependencies
 requirements-dev.txt    # Dev dependencies (pytest, ruff), pinned exactly
-pyproject.toml          # ruff configuration
+pyproject.toml          # Packaging (pip install .) and ruff configuration
 tests/
   test_evm.py           # CPU unit tests
-  test_evm_cuda.py      # GPU unit tests
-  test_evm_cuda_shim.py # CUDA pipeline tests on CPU (no GPU needed)
+  test_evm_cuda.py      # GPU tests (real CuPy)
+  test_evm_cuda_shim.py # GPU code path on CPU with a fake cupy (no GPU needed)
   test_synthetic_shapes.py # Gain, lag and isotropy on shapes with exact ground truth
 scripts/
   synthetic_shapes.py   # Synthetic pulsating shapes and measurements

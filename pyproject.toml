@@ -1,3 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evm-magnify"
+dynamic = ["version"]
+description = "Eulerian Video Magnification on the CPU (NumPy) or an NVIDIA GPU (CuPy)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.20.3,<3",
+    "opencv-python>=4.7.0,<5",
+    "scipy>=1.7.1,<2",
+]
+
+[project.optional-dependencies]
+cuda = ["cupy-cuda12x>=12.0.0,<14"]
+
+[project.scripts]
+evm = "evm:main"
+
+[tool.setuptools]
+py-modules = ["evm"]
+
+[tool.setuptools.dynamic]
+version = {attr = "evm.__version__"}
+
 [tool.ruff]
 target-version = "py310"
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION=$(cat VERSION)-cuda
+VERSION=$(cat VERSION)
 
 docker build \
     -f Dockerfile.cuda \

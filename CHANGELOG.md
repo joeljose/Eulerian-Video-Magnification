@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- The GPU pyramid used different filters from the CPU one (Gaussian sigma 1 and bilinear zoom instead of OpenCV's 5-tap kernel), so CPU and GPU amplified different content; both now use OpenCV's operators and match to float precision (#35)
 - Output pixels were truncated to uint8 instead of rounded, which darkened the output slightly
 - `nan` and `inf` were accepted for `-a`, `-fl`, `-fh`, `--lambda-c` and `--fps`
 - Per-level gains went negative for small frames with the default `--lambda-c` (for example 320×240 at `-a 10`), so the motion was shrunk instead of magnified; they are now clamped at 0
@@ -20,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--lambda-c` help and docs described its effect backwards: lower values give stronger amplification (#28)
 
 ### Changed
+- `evm.py` and `evm_cuda.py` are merged into one implementation: `python evm.py --gpu [--device N]` runs the same code on CuPy arrays. `evm_cuda.py` remains for one release and runs `evm.py --gpu`; the CUDA Docker image runs `evm.py --gpu` (#39)
+- The version is kept in `VERSION` and `evm.__version__` only (no more `-cuda` suffix, which SemVer reads as a pre-release) (#39)
+- The pyramid is built and collapsed in blocks of 32 frames instead of one frame at a time
 - `--freq-high` above the Nyquist frequency is now an error instead of a warning
 - The narrow-band warning now fires when the band is narrower than the clip's frequency resolution (`fps / frames`)
 - The temporal filter uses a real FFT (`rfft`), which halves its working memory
@@ -27,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The CUDA image is only built in CI when its inputs change (#34)
 
 ### Added
+- `pip install .` / `pip install .[cuda]` install the `evm` command and module (#39)
 - `--fps` to set the input frame rate for files that don't report one
 - Synthetic validation: `scripts/synthetic_shapes.py` and `tests/test_synthetic_shapes.py` measure gain, phase lag and isotropy on pulsating shapes with exact ground truth (adapted from Motion-Magnification-Using-2D-DTCWT)
 - The effective frequency band, bin count and per-level gains are printed at startup (#28, #29)
