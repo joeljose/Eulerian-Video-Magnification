@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (breaking: default output changes)
+- `-a` is now the true gain: in-band changes on every amplified level are multiplied by exactly `1 + α`. The temporal filter used to keep positive frequencies only, like the MATLAB reference, which halved the in-band signal; it now passes it at full amplitude. For the old look, halve `-a` (#28)
+- New defaults `-a 10 --lambda-c 16` (MATLAB's Laplacian example settings) instead of `-a 50 --lambda-c 1000`. With the old `--lambda-c 1000`, `-a` was capped far below the requested value on most videos (on face.mp4, `-a 50` gave per-level gains of 4.7 and 11.5, then halved); now the requested gain is what the amplified levels get. For pulse detection use a large `--lambda-c`, e.g. `-a 50 -fl 0.83 -fh 1.0 --lambda-c 1000` (#28)
+- The golden regression output is regenerated for these changes
+
 ### Fixed
 - Peak memory: the pipeline stores only the amplified pyramid levels and adds their collapse to the input, and the CLI keeps frames as uint8 and writes output as it goes. face.mp4 peaks at 0.90 GiB of RAM instead of 4.1 GiB, and 0.88 GiB of VRAM, with the same output (#32)
 - The VRAM estimate now matches measured use to within 25%, and the README memory figures are measured (#32, #42)

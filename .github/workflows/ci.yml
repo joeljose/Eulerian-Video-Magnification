@@ -41,7 +41,7 @@ jobs:
           docker run --rm --entrypoint "" \
             -v "${{ github.workspace }}:/data" \
             evm-ci \
-            python -u evm.py -i /data/face.mp4 -o /data/face_magnified.avi -fl 0.83 -fh 1.0 -a 50
+            python -u evm.py -i /data/face.mp4 -o /data/face_magnified.avi -fl 0.83 -fh 1.0 -a 50 --lambda-c 1000
 
       - name: Verify output is magnified
         run: |

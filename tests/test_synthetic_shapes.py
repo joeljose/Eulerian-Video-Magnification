@@ -26,11 +26,11 @@ def run(func, **kwargs):
 
 
 def test_in_band_gain_is_pinned():
-    """Pins current behaviour: a thin ring in the band gets ~0.38k, because
-    the filter halves the signal and the finest and coarsest pyramid levels
-    are not amplified (issue #28). Update when #28 changes what alpha means."""
+    """Pins current behaviour: a thin ring in the band moves ~0.57k. Levels
+    1 to N-2 get exactly 1 + alpha; the shortfall is the part of the edge
+    in level 0 and the low-pass residual, which are never amplified."""
     r = run(ss.analyse_outline, freq=1.5)
-    assert 0.33 <= r["gain_over_k"] <= 0.43, r["gain_over_k"]
+    assert 0.52 <= r["gain_over_k"] <= 0.62, r["gain_over_k"]
 
 
 @pytest.mark.parametrize("freq", [0.2, 6.0])
@@ -58,7 +58,7 @@ def test_tiny_alpha_is_identity():
 def test_default_lambda_c_never_shrinks_motion():
     """With lambda_c 1000 on a small frame the per-level gains used to go
     negative, so 'magnify 10x' shrank the motion to about 0.7x."""
-    r = run(ss.analyse, magnify=ss.evm_magnify(K, lambda_c=1000))
+    r = run(ss.analyse, magnify=ss.evm_magnify(K - 1, lambda_c=1000))
     assert r["gain"] >= 0.99, r["gain"]
 
 

@@ -113,7 +113,7 @@ def _clips(shape, r0, r1, k, freq, n, edge_sigma, thickness, noise, magnify):
     if noise:
         clip = clip + np.random.RandomState(0).normal(0, noise, clip.shape)
     if magnify is None:
-        magnify = evm_magnify(k)
+        magnify = evm_magnify(k - 1)  # EVM scales changes by 1 + alpha
     out = np.asarray(magnify(clip.astype(np.float32)), dtype=np.float64)
     ideal = render(shape, r0 + k * r1 * wave, edge_sigma=edge_sigma, thickness=thickness)
     return clip, out, ideal
@@ -125,7 +125,8 @@ def analyse(shape="circle", r0=30.0, r1=0.02, k=10.0, freq=1.5, n=180, noise=0.0
 
     Args:
         magnify: function(frames float32, 0-255) -> magnified frames.
-            Default: evm_magnify(k).
+            Default: evm_magnify(k - 1), since EVM multiplies in-band
+            changes by 1 + alpha.
         trim: frames dropped at each end (temporal filter edges).
     """
     clip, out, ideal = _clips(shape, r0, r1, k, freq, n, edge_sigma, None, noise, magnify)
@@ -178,7 +179,7 @@ def analyse_outline(shape="circle", thickness=1.0, r0=30.0, r1=0.05, k=10.0, fre
 
 
 if __name__ == "__main__":
-    print("Thin ring (1 px), k = 10, band 0.5-3 Hz, lambda_c 10, 4 levels")
+    print("Thin ring (1 px), k = 10 (alpha 9), band 0.5-3 Hz, lambda_c 10, 4 levels")
     for freq in (0.2, 0.5, 1.0, 1.5, 3.0, 6.0):
         r = analyse_outline(freq=freq, n=240, trim=50)
         print(f"  {freq:4.1f} Hz: gain/k {r['gain_over_k']:.3f}")

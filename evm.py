@@ -271,9 +271,10 @@ def passband_freqs(n, fps, freq_low, freq_high):
 def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     """Apply ideal bandpass filter along the time axis.
 
-    Follows the reference MATLAB implementation (ideal_bandpassing.m),
-    including its half-amplitude output (it keeps positive frequencies
-    only). No amplification is applied; that is done per level.
+    In-band frequencies pass at full amplitude and everything else is
+    removed. (The reference MATLAB ideal_bandpassing.m keeps positive
+    frequencies only, which halves the in-band signal; this doesn't, so
+    alpha is the true gain.) No amplification is applied here.
 
     The clip is extended with its time-reversed copy before the FFT, so the
     transform sees a seamless loop instead of joining the last frame to the
@@ -298,11 +299,7 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
     spectrum = fft.rfft(extended, axis=0)
     del extended
     spectrum *= mask
-    filtered = fft.irfft(spectrum, 2 * n, axis=0)[:n]
-
-    # x0.5: the reference keeps positive frequencies only, which halves the
-    # in-band signal. Kept for MATLAB parity; see issue #28.
-    return (0.5 * filtered).astype(xp.float32)
+    return fft.irfft(spectrum, 2 * n, axis=0)[:n].astype(xp.float32, copy=False)
 
 
 def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
@@ -348,7 +345,7 @@ def pyramid_shapes(height, width, pyramid_levels):
 
 
 def magnify_blocks(read_block, num_frames, height, width, fps, freq_min, freq_max,
-                   alpha, pyramid_levels=4, lambda_c=1000, chrom_attenuation=1.0,
+                   alpha, pyramid_levels=4, lambda_c=16, chrom_attenuation=1.0,
                    xp=np):
     """The EVM pipeline, yielding the output in blocks of frames.
 
@@ -422,7 +419,7 @@ def magnify_blocks(read_block, num_frames, height, width, fps, freq_min, freq_ma
 
 
 def eulerian_magnification(video, fps, freq_min, freq_max, alpha,
-                           pyramid_levels=4, lambda_c=1000,
+                           pyramid_levels=4, lambda_c=16,
                            chrom_attenuation=1.0, out=None):
     """Run the Eulerian Video Magnification pipeline on a whole video.
 
@@ -505,8 +502,8 @@ def main(argv=None):
         epilog=(
             "Examples:\n"
             "  python evm.py -i face.mp4\n"
-            "  python evm.py -i face.mp4 -o magnified.avi -a 50 "
-            "-fl 0.83 -fh 1.0\n"
+            "  python evm.py -i face.mp4 -o pulse.avi -a 50 "
+            "-fl 0.83 -fh 1.0 --lambda-c 1000\n"
             "  python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 "
             "--lambda-c 10 --chrom-attenuation 0\n"
             "  python evm.py -i face.mp4 --gpu --device 0"
@@ -533,16 +530,17 @@ def main(argv=None):
         help='Upper cutoff frequency in Hz (default: 2.0)'
     )
     parser.add_argument(
-        '-a', '--amplification', type=float, default=50,
-        help='Amplification factor / alpha (default: 50)'
+        '-a', '--amplification', type=float, default=10,
+        help='Amplification factor alpha: in-band changes are multiplied '
+             'by 1 + alpha on each amplified pyramid level (default: 10)'
     )
     parser.add_argument(
         '--pyramid-levels', type=int, default=4,
         help='Number of Laplacian pyramid levels (default: 4)'
     )
     parser.add_argument(
-        '--lambda-c', type=float, default=1000,
-        help='Cutoff spatial wavelength in pixels (default: 1000). '
+        '--lambda-c', type=float, default=16,
+        help='Cutoff spatial wavelength in pixels (default: 16). '
              'Structures smaller than this get reduced amplification, '
              'so lower values give stronger amplification '
              '(see paper Figure 6).'
@@ -694,7 +692,7 @@ def main(argv=None):
     print(f"  Amplification:       {args.amplification}x")
     print(f"  Level gains:         "
           f"[{', '.join(f'{a:.2f}' for a in level_alphas)}] "
-          f"(x0.5 from one-sided filter)")
+          f"(finest to coarsest)")
     print(f"  Pyramid levels:      {args.pyramid_levels}")
     print(f"  Lambda_c:            {args.lambda_c}")
     print(f"  Chrom attenuation:   {args.chrom_attenuation}\n")
