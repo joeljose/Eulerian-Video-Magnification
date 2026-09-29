@@ -362,7 +362,8 @@ All tests run inside Docker — no local Python dependencies needed. Build the t
 - `load_video` error handling (unreadable input, fps 0, under-reported frame count)
 - `save_video` failing loudly when the writer cannot open
 - Empty frequency bands and per-level gains
-- All CLI input validation error paths
+- All CLI input validation error paths, and one CLI run to completion on a real clip
+- A golden regression test: a 48-frame crop of face.mp4 and its stored output (`tests/data/golden_face.npz`). Regenerate it with `python scripts/make_golden.py` only when an output change is intended, and say so in the CHANGELOG
 
 **CUDA shim tests** (`tests/test_evm_cuda_shim.py`) run the GPU branch of `evm.py` on the CPU with a fake `cupy` (NumPy/SciPy underneath), so the GPU code path, `--gpu` setup and VRAM check are tested without a GPU; the result must equal the CPU result.
 
@@ -414,6 +415,7 @@ tests/
   test_synthetic_shapes.py # Gain, lag and isotropy on shapes with exact ground truth
 scripts/
   synthetic_shapes.py   # Synthetic pulsating shapes and measurements
+  make_golden.py        # Regenerates tests/data/golden_face.npz
 docs/design/            # Architecture decision records
 VERSION                 # Single source of truth for version
 CHANGELOG.md            # Release history

@@ -161,12 +161,16 @@ def open_writer(path, fps, frame_size):
     return writer
 
 
-def write_yiq(writer, frames_yiq):
-    """Write YIQ float frames (numpy or cupy) as rounded BGR uint8."""
+def yiq_to_bgr8(frames_yiq):
+    """YIQ float frames (numpy or cupy) to rounded BGR uint8, on the host."""
     xp = _backend(frames_yiq)[0]
     rgb = yiq_to_rgb(frames_yiq)
-    bgr = _to_numpy(xp.clip(xp.rint(rgb[..., ::-1] * 255), 0, 255).astype(xp.uint8))
-    for frame in bgr:
+    return _to_numpy(xp.clip(xp.rint(rgb[..., ::-1] * 255), 0, 255).astype(xp.uint8))
+
+
+def write_yiq(writer, frames_yiq):
+    """Write YIQ float frames (numpy or cupy) as rounded BGR uint8."""
+    for frame in yiq_to_bgr8(frames_yiq):
         writer.write(np.ascontiguousarray(frame))
 
 
