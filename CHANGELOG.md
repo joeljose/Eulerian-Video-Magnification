@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--lambda-c` help and docs described its effect backwards: lower values give stronger amplification (#28)
 
 ### Changed
+- The CPU temporal filter runs SciPy's FFT on all cores (`workers=-1`): the filter is about 3x faster and face.mp4 takes 4.9 s instead of 5.4 s end to end (#40)
 - Reproducible builds: the images install from hash-locked `requirements.lock` / `requirements-cuda.lock` on a digest-pinned `python:3.11.16-slim`; Actions are pinned by SHA and Dependabot watches them (#41)
 - The CUDA image is Python 3.11 slim plus CuPy and the CUDA libraries as pip wheels instead of `nvidia/cuda:*-devel` (12.7 GB to 3.5 GB, and the same Python as the CPU image); `opencv-python-headless` everywhere (CPU image 1.13 GB to 0.78 GB) (#41)
 - Images use a fixed non-root user, so `docker build .` needs no build args; run with `--user "$(id -u):$(id -g)"` to write into a mounted folder (#41)

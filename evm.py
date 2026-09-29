@@ -294,12 +294,16 @@ def ideal_bandpass_filter(data, fps, freq_low, freq_high):
         )
     mask = xp.asarray(keep.reshape([len(keep)] + [1] * (data.ndim - 1)))
 
+    # SciPy's FFT runs on all CPU cores with workers=-1 (about 3x faster
+    # here); CuPy's is already parallel on the GPU
+    workers = {'workers': -1} if xp is np else {}
+
     # Clip followed by its time reverse: a seamless loop for the FFT
     extended = xp.concatenate([data, data[::-1]], axis=0)
-    spectrum = fft.rfft(extended, axis=0)
+    spectrum = fft.rfft(extended, axis=0, **workers)
     del extended
     spectrum *= mask
-    return fft.irfft(spectrum, 2 * n, axis=0)[:n].astype(xp.float32, copy=False)
+    return fft.irfft(spectrum, 2 * n, axis=0, **workers)[:n].astype(xp.float32, copy=False)
 
 
 def compute_level_alphas(height, width, pyramid_levels, alpha, lambda_c):
