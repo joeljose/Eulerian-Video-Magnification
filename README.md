@@ -148,12 +148,14 @@ Per-level alpha is computed based on `lambda_c` and the representative spatial w
 
 Collapsing a Laplacian pyramid is linear, and only the levels with a non-zero gain change, so the output is `input + collapse(amplified levels)`. The pipeline therefore stores only the amplified levels (1 to N-2, at most a third of the video's size) and never level 0 or the low-pass residual. The CLI keeps the decoded frames as uint8, converts them to YIQ a block of 8 frames at a time, and writes each output block as soon as it's ready. The temporal filter works on 32 MB chunks of pixels.
 
-Measured on face.mp4 (301 frames, 528×592, 4 levels; Ryzen 7 7445HS, RTX 4050 Laptop 6 GB):
+Measured on face.mp4 (301 frames, 528×592, 4 levels, `-a 50 -fl 0.83 -fh 1.0 --lambda-c 1000`) on an idle Ryzen 7 7445HS (12 threads) with an RTX 4050 Laptop 6 GB; times are the median of 5 runs after a warm-up, including decoding and writing:
 
-| | peak memory | time |
-|---|---:|---:|
-| CPU, peak RAM (RSS) | 0.90 GiB (4.1 GiB in v2.1.0) | 5.6 s |
-| GPU, peak VRAM (cupy pool) | 0.88 GiB | 1.8 s (mostly decoding) |
+| | `.avi` (MJPG) | `.mkv` (FFV1, lossless) | peak memory |
+|---|---:|---:|---:|
+| CPU | 4.5 s | 7.4 s | 0.91 GiB RAM (4.1 GiB in v2.1.0) |
+| GPU (`--gpu`) | 1.5 s | 4.6 s | 0.88 GiB VRAM |
+
+Lossless output costs about 10 ms a frame: OpenCV's FFV1 encoder runs on one core.
 
 As a rule of thumb, RAM is about 2.3× the uint8 video (`frames × height × width × 3` bytes) plus 0.4 GB. The GPU needs about 1.25× the uint8 video in VRAM plus 0.4 GB; `--gpu` prints its estimate before starting.
 
