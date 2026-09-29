@@ -194,19 +194,21 @@ jupyter notebook Eulerian_Video_Magnification.ipynb
 # Build (tags as evm:<version> and evm:latest)
 ./docker-build.sh
 
-# Run
-docker run --rm -it \
+# Run (--user lets the container write files you own into the mounted folder)
+docker run --rm -it --user "$(id -u):$(id -g)" \
     -v "$(pwd)":/app/data \
     evm \
     -i /app/data/input.mp4 -o /app/data/output.avi
 ```
+
+`docker build .` needs no build arguments. The image runs as a fixed non-root user and installs hash-locked dependencies from `requirements.lock`.
 
 ### D. GPU (CUDA)
 
 For faster processing on NVIDIA GPUs.
 
 **Prerequisites:**
-- NVIDIA GPU with CUDA support (CUDA 12.x+)
+- NVIDIA GPU with a driver that supports CUDA 12 (driver 525 or newer)
 - [NVIDIA drivers](https://www.nvidia.com/Download/index.aspx) installed on the host
 - [Docker](https://docs.docker.com/get-docker/)
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) — allows Docker to access the GPU
@@ -224,26 +226,26 @@ nvidia-smi  # Should show your GPU name, driver version, and CUDA version
 **Run on your video:**
 ```bash
 # Basic usage — magnify face.mp4 with default settings
-docker run --gpus all --rm \
+docker run --gpus all --rm --user "$(id -u):$(id -g)" \
     -v "$(pwd)":/data \
     evm-cuda \
     -i /data/face.mp4 -o /data/face_magnified.avi
 
 # Pulse detection (0.83–1.0 Hz, coarse levels only)
-docker run --gpus all --rm \
+docker run --gpus all --rm --user "$(id -u):$(id -g)" \
     -v "$(pwd)":/data \
     evm-cuda \
     -i /data/face.mp4 -o /data/face_magnified.avi \
     -fl 0.83 -fh 1.0 -a 50 --lambda-c 1000
 
 # Select a specific GPU (for multi-GPU systems)
-docker run --gpus all --rm \
+docker run --gpus all --rm --user "$(id -u):$(id -g)" \
     -v "$(pwd)":/data \
     evm-cuda \
     -i /data/input.mp4 -o /data/output.avi --device 1
 ```
 
-The image runs `evm.py --gpu`: the same code as the CPU version, on CuPy arrays (backed by cuFFT). The CPU and GPU give the same result to float precision. It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
+The image is Python 3.11 slim plus CuPy and the CUDA libraries as pip wheels (about 3.5 GB; no CUDA base image), and runs `evm.py --gpu`: the same code as the CPU version, on CuPy arrays (backed by cuFFT). The CPU and GPU give the same result to float precision. It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
 
 **VRAM requirements:** Depends on video resolution and length; the tool prints its estimate before starting (measured to be within 25%). face.mp4 (301 frames, 528×592) needs about 0.9 GB; a 1080p 30 s clip at 30 fps needs about 7.6 GB of VRAM, plus about 5.6 GB of host RAM for the decoded frames. See [Memory and Speed](#memory-and-speed).
 

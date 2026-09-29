@@ -1,32 +1,30 @@
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04
+# CPU base plus CuPy and the CUDA libraries as pip wheels: the same Python
+# as the CPU image, and a few GB smaller than an nvidia/cuda base. The host
+# needs the NVIDIA driver and Container Toolkit (docker run --gpus all).
+FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 python3-pip libgl1 libglib2.0-0 && \
-    rm -rf /var/lib/apt/lists/*
-
-ARG UID
-ARG GID
-ARG UNAME
-
-RUN groupadd -g ${GID} ${UNAME} && \
-    useradd -m -u ${UID} -g ${GID} ${UNAME}
+# Fixed non-root user; for bind mounts run with --user "$(id -u):$(id -g)"
+RUN useradd -m -u 1000 app
 
 WORKDIR /app
 
-COPY requirements-cuda.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements-cuda.txt -r requirements-dev.txt
+# Hash-locked dependencies; regenerate requirements-cuda.lock as described
+# in CONTRIBUTING.md when requirements*.txt change
+COPY requirements-cuda.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-cuda.lock
 
-COPY evm.py evm_cuda.py ./
-COPY pyproject.toml VERSION ./
+# CuPy loads the CUDA libraries from the nvidia-* wheels
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/site-packages/nvidia/cufft/lib:/usr/local/lib/python3.11/site-packages/nvidia/nvjitlink/lib
+
+COPY evm.py evm_cuda.py pyproject.toml VERSION ./
 COPY tests/ tests/
 COPY scripts/ scripts/
 
-RUN chown -R ${UID}:${GID} /app
+RUN chown -R app:app /app
 
 ARG VERSION
 LABEL version=${VERSION}
 
-USER ${UNAME}
+USER app
 
-ENTRYPOINT ["python3", "-u", "evm.py", "--gpu"]
+ENTRYPOINT ["python", "-u", "evm.py", "--gpu"]

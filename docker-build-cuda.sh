@@ -5,9 +5,6 @@ VERSION=$(cat VERSION)
 
 docker build \
     -f Dockerfile.cuda \
-    --build-arg UID="$(id -u)" \
-    --build-arg GID="$(id -g)" \
-    --build-arg UNAME="$(whoami)" \
     --build-arg VERSION="${VERSION}" \
     -t evm-cuda:${VERSION} \
     -t evm-cuda:latest .

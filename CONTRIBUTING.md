@@ -19,6 +19,19 @@ Thanks for your interest in contributing!
    Tests run inside Docker — no local Python dependencies needed. See [Development](README.md#development) in the README for details.
 6. **Open a pull request** against `main` with a clear description of your changes.
 
+## Dependencies
+
+`requirements*.txt` (and `pyproject.toml`) hold the allowed version ranges. The Docker images install from the hash-locked `requirements.lock` (CPU) and `requirements-cuda.lock` (GPU), both for Python 3.11, so builds are reproducible. After changing a `requirements*.txt` file, or to pick up new releases on purpose, regenerate both locks with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv pip compile requirements.txt requirements-dev.txt --python-version 3.11 \
+    --python-platform x86_64-manylinux_2_28 --generate-hashes --no-header -o requirements.lock
+uv pip compile requirements-cuda.txt requirements-dev.txt --python-version 3.11 \
+    --python-platform x86_64-manylinux_2_28 --generate-hashes --no-header -o requirements-cuda.lock
+```
+
+The base image and GitHub Actions are pinned by digest/SHA; Dependabot proposes updates for them monthly.
+
 ## Reporting bugs
 
 Open a GitHub issue with:

@@ -1,31 +1,24 @@
-FROM python:3.11-slim
+FROM python:3.11.16-slim@sha256:e41613d42d4891e4930f79523f93f81bbc7632584ec65e36ab055f41a800b41e
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && \
-    rm -rf /var/lib/apt/lists/*
-
-ARG UID
-ARG GID
-ARG UNAME
-
-RUN groupadd -g ${GID} ${UNAME} && \
-    useradd -m -u ${UID} -g ${GID} ${UNAME}
+# Fixed non-root user; for bind mounts run with --user "$(id -u):$(id -g)"
+RUN useradd -m -u 1000 app
 
 WORKDIR /app
 
-COPY requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+# Hash-locked dependencies; regenerate requirements.lock as described in
+# CONTRIBUTING.md when requirements*.txt change
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
-COPY evm.py evm_cuda.py ./
-COPY pyproject.toml VERSION ./
+COPY evm.py evm_cuda.py pyproject.toml VERSION ./
 COPY tests/ tests/
 COPY scripts/ scripts/
 
-RUN chown -R ${UID}:${GID} /app
+RUN chown -R app:app /app
 
 ARG VERSION
 LABEL version=${VERSION}
 
-USER ${UNAME}
+USER app
 
 ENTRYPOINT ["python", "-u", "evm.py"]

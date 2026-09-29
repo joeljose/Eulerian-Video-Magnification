@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--lambda-c` help and docs described its effect backwards: lower values give stronger amplification (#28)
 
 ### Changed
+- Reproducible builds: the images install from hash-locked `requirements.lock` / `requirements-cuda.lock` on a digest-pinned `python:3.11.16-slim`; Actions are pinned by SHA and Dependabot watches them (#41)
+- The CUDA image is Python 3.11 slim plus CuPy and the CUDA libraries as pip wheels instead of `nvidia/cuda:*-devel` (12.7 GB to 3.5 GB, and the same Python as the CPU image); `opencv-python-headless` everywhere (CPU image 1.13 GB to 0.78 GB) (#41)
+- Images use a fixed non-root user, so `docker build .` needs no build args; run with `--user "$(id -u):$(id -g)"` to write into a mounted folder (#41)
 - `evm.py` and `evm_cuda.py` are merged into one implementation: `python evm.py --gpu [--device N]` runs the same code on CuPy arrays. `evm_cuda.py` remains for one release and runs `evm.py --gpu`; the CUDA Docker image runs `evm.py --gpu` (#39)
 - The version is kept in `VERSION` and `evm.__version__` only (no more `-cuda` suffix, which SemVer reads as a pre-release) (#39)
 - The pyramid is built and collapsed in blocks of 32 frames instead of one frame at a time

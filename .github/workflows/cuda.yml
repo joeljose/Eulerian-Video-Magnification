@@ -5,10 +5,10 @@ name: CUDA image
 on:
   push:
     branches: [main]
-    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
+    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-cuda.lock, requirements-dev.txt]
   pull_request:
     branches: [main]
-    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-dev.txt]
+    paths: [Dockerfile.cuda, evm.py, evm_cuda.py, requirements-cuda.txt, requirements-cuda.lock, requirements-dev.txt]
 
 permissions:
   contents: read
@@ -17,18 +17,14 @@ jobs:
   test-cuda:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Build CUDA Docker image
         run: |
-          docker build -f Dockerfile.cuda \
-            --build-arg UID=$(id -u) \
-            --build-arg GID=$(id -g) \
-            --build-arg UNAME=$(whoami) \
-            -t evm-cuda-ci .
+          docker build -f Dockerfile.cuda -t evm-cuda-ci .
 
       - name: Verify import, --help and --version
         run: |
-          docker run --rm --entrypoint "" evm-cuda-ci python3 -c "import evm, cupy"
-          docker run --rm --entrypoint "" evm-cuda-ci python3 evm.py --help
-          docker run --rm --entrypoint "" evm-cuda-ci python3 evm_cuda.py --version
+          docker run --rm --entrypoint "" evm-cuda-ci python -c "import evm, cupy"
+          docker run --rm --entrypoint "" evm-cuda-ci python evm.py --help
+          docker run --rm --entrypoint "" evm-cuda-ci python evm_cuda.py --version
