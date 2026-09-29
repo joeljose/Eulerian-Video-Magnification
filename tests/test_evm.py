@@ -85,11 +85,14 @@ class TestIdealBandpassFilter:
 
         filtered = evm.ideal_bandpass_filter(data, fps, 1.0, 3.0)
 
-        # One-sided mask (matching MATLAB reference) passes ~25% of energy
-        # for a pure sine: only positive freq half, real part of IFFT
-        input_energy = np.sum(data ** 2)
-        output_energy = np.sum(filtered ** 2)
-        assert output_energy / input_energy > 0.2  # at least 20% energy preserved
+        # Pins the MATLAB-parity behaviour: the reference keeps positive
+        # frequencies only, so an in-band sine comes out at half amplitude
+        # (issue #28). Change this deliberately if #28 changes it.
+        # Fit the 2 Hz amplitude away from the clip's ends
+        mid = slice(30, -30)
+        basis = np.stack([np.sin(2 * np.pi * 2.0 * t), np.cos(2 * np.pi * 2.0 * t)], axis=1)[mid]
+        coef, *_ = np.linalg.lstsq(basis, filtered[mid, 0, 0, 0], rcond=None)
+        assert np.hypot(*coef) == pytest.approx(0.5, abs=0.02)
 
     def test_rejects_out_of_band_signal(self):
         """A 10Hz sine wave with bandpass 1-3Hz should be zeroed."""
@@ -144,6 +147,51 @@ def reference_magnification(video, fps, fl, fh, alpha, levels, lambda_c, chrom):
             img = cv2.pyrUp(img, dstsize=pyr[i].shape[2:0:-1]) + pyr[i][t]
         out.append(img)
     return np.stack(out)
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def psnr(a, b):
+    mse = np.mean((a.astype(np.float64) - b.astype(np.float64)) ** 2)
+    return 10 * np.log10(255.0 ** 2 / max(mse, 1e-12))
+
+
+class TestGolden:
+    """Regression against a stored crop of face.mp4 and its output.
+    Regenerate with scripts/make_golden.py only for intended changes."""
+
+    def test_output_matches_golden(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import make_golden
+        golden = np.load(os.path.join(ROOT, "tests", "data", "golden_face.npz"))
+        assert psnr(make_golden.magnify(golden["input"]), golden["output"]) >= 50
+        # the golden output itself must differ from its input
+        assert psnr(golden["output"], golden["input"]) < 40
+
+
+class TestCliEndToEnd:
+    def test_magnifies_a_real_clip(self, tmp_path):
+        """Run evm.py to completion on a small real clip."""
+        n, h, w, fps = 60, 48, 64, 30.0
+        t = np.arange(n) / fps
+        yy, xx = np.mgrid[:h, :w]
+        blob = np.exp(-((yy - h / 2) ** 2 + (xx - w / 2) ** 2) / (2 * 4.0 ** 2))
+        rgb = 0.5 + 0.02 * np.sin(2 * np.pi * 1.5 * t)[:, None, None] * blob
+        clip = str(tmp_path / "clip.avi")
+        evm.save_video(evm.rgb_to_yiq(np.repeat(rgb[..., None], 3, axis=3).astype(np.float32)),
+                       fps, clip)
+        out = str(tmp_path / "out.avi")
+        result = subprocess.run(
+            [sys.executable, EVM_SCRIPT, "-i", clip, "-o", out, "-fl", "0.8", "-fh", "3",
+             "-a", "20", "--lambda-c", "10"], capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert "Output saved" in result.stdout
+        src, _ = evm.read_frames(clip)
+        dst, dst_fps = evm.read_frames(out)
+        assert dst.shape == src.shape and dst_fps == fps
+        c = (slice(None), h // 2, w // 2, 1)
+        assert dst[c].astype(float).std() > 1.5 * src[c].astype(float).std()
 
 
 class TestPipeline:

@@ -134,3 +134,11 @@ def test_pipeline_amplifies_in_band_signal():
     with contextlib.redirect_stdout(io.StringIO()):
         out = evm.eulerian_magnification(video.copy(), fps, 0.5, 2.0, alpha=20, lambda_c=10)
     assert out[:, c, c, 0].std() > 2 * video[:, c, c, 0].std()
+
+
+def test_golden_through_gpu_branch(fake_cupy):
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import make_golden
+    golden = np.load(os.path.join(ROOT, "tests", "data", "golden_face.npz"))
+    out = make_golden.magnify(golden["input"], xp=fake_cupy)
+    assert np.abs(out.astype(int) - golden["output"]).max() <= 1

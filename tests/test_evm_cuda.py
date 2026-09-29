@@ -54,3 +54,12 @@ def test_gpu_matches_cpu_end_to_end():
         gpu = cp.asnumpy(evm.eulerian_magnification(cp.asarray(video), *args, lambda_c=10))
     mse = np.mean((cpu - gpu) ** 2)
     assert 10 * np.log10(1.0 / max(mse, 1e-30)) >= 60
+
+
+def test_golden_on_gpu():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(root, "scripts"))
+    import make_golden
+    golden = np.load(os.path.join(root, "tests", "data", "golden_face.npz"))
+    out = make_golden.magnify(golden["input"], xp=cp)
+    assert np.abs(out.astype(int) - golden["output"]).max() <= 1
