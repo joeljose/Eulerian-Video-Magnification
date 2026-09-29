@@ -18,7 +18,7 @@ import evm  # noqa: E402
 # 48 frames of a 48x48 forehead crop: small enough to keep in git
 FRAMES, ROWS, COLS = slice(0, 48), slice(100, 148), slice(220, 268)
 FPS = 30.0
-PARAMS = dict(freq_min=0.7, freq_max=3.0, alpha=50, pyramid_levels=4,
+PARAMS = dict(freq_min=0.7, freq_max=3.0, alpha=20, pyramid_levels=4,
               lambda_c=10, chrom_attenuation=1.0)
 
 

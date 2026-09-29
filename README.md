@@ -133,7 +133,7 @@ Video is converted to YIQ (NTSC) color space using the same matrices as MATLAB's
 
 ### Temporal Filtering
 
-Ideal bandpass filtering via FFT, following MATLAB's `ideal_bandpassing.m`: the filtered signal keeps its sign, so pixels oscillate above and below their mean. Like the reference, the output is half the in-band signal (the reference keeps positive frequencies only); see issue #28.
+Ideal bandpass filtering via FFT: in-band frequencies pass at full amplitude and everything else is removed, and the filtered signal keeps its sign, so pixels oscillate above and below their mean. The amplified output is therefore `(1 + α) ×` the in-band change on every amplified level. (MATLAB's `ideal_bandpassing.m` keeps positive frequencies only, which halves the in-band signal, so there `α` delivered about `α / 2`; this version doesn't, since v3.0.0.)
 
 Before the FFT the clip is extended with its time-reversed copy. The FFT treats a clip as a loop, so without this the last frame is joined to the first, and slow drift over the clip (lighting, auto-exposure) turns into amplified flicker. The band must contain at least one FFT bin; a band narrower than the clip's resolution (`fps / frames`) gives a warning, and a band above the Nyquist frequency (`fps / 2`) is an error.
 
@@ -229,12 +229,12 @@ docker run --gpus all --rm \
     evm-cuda \
     -i /data/face.mp4 -o /data/face_magnified.avi
 
-# Pulse detection (0.83–1.0 Hz, 50x amplification)
+# Pulse detection (0.83–1.0 Hz, coarse levels only)
 docker run --gpus all --rm \
     -v "$(pwd)":/data \
     evm-cuda \
     -i /data/face.mp4 -o /data/face_magnified.avi \
-    -fl 0.83 -fh 1.0 -a 50
+    -fl 0.83 -fh 1.0 -a 50 --lambda-c 1000
 
 # Select a specific GPU (for multi-GPU systems)
 docker run --gpus all --rm \
@@ -255,7 +255,7 @@ The image runs `evm.py --gpu`: the same code as the CPU version, on CuPy arrays 
 
 ```bash
 python evm.py -i face.mp4
-python evm.py -i face.mp4 -o magnified.avi -a 50 -fl 0.83 -fh 1.0
+python evm.py -i face.mp4 -o pulse.avi -a 50 -fl 0.83 -fh 1.0 --lambda-c 1000
 python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuation 0
 ```
 
@@ -265,9 +265,9 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `-o / --output` | `<input>_magnified.avi` | Output video path |
 | `-fl / --freq-low` | 0.5 | Lower cutoff frequency (Hz) |
 | `-fh / --freq-high` | 2.0 | Upper cutoff frequency (Hz) |
-| `-a / --amplification` | 50 | Amplification factor (alpha) |
+| `-a / --amplification` | 10 | Amplification factor α: in-band changes on each amplified level are multiplied by exactly `1 + α` (capped per level by `--lambda-c`) |
 | `--pyramid-levels` | 4 | Number of Laplacian pyramid levels |
-| `--lambda-c` | 1000 | Cutoff spatial wavelength in pixels (paper Figure 6). Structures smaller than this get reduced amplification, so **lower = stronger amplification**. The effective per-level gains are printed at startup. |
+| `--lambda-c` | 16 | Cutoff spatial wavelength in pixels (paper Figure 6). Structures smaller than this get reduced amplification, so **lower = stronger amplification**. The effective per-level gains are printed at startup. |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 | `--fps` | *(from video)* | Frame rate of the input, for files that don't report one |
 | `--version` | — | Show program version and exit |
@@ -279,7 +279,7 @@ Add `--gpu` to run on an NVIDIA GPU. The recommended way is via Docker (see [GPU
 ```bash
 pip install -r requirements-cuda.txt     # or: pip install .[cuda]
 python evm.py -i face.mp4 --gpu
-python evm.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --gpu --device 0
+python evm.py -i face.mp4 -a 50 -fl 0.83 -fh 1.0 --lambda-c 1000 --gpu --device 0
 ```
 
 | GPU Flag | Default | Description |
@@ -301,31 +301,31 @@ Open the notebook and run all cells. On Colab it clones this repository and impo
 
 - Use `show_frequencies()` in the notebook to visualize frequency content before choosing cutoff frequencies.
 - Start with low amplification and increase gradually.
-- For pulse/color magnification: 0.5–2 Hz, high amplification (50+). Check the printed level gains: with the default `--lambda-c 1000`, `-a 50` on face.mp4 only gets gains of 4.7 and 11.5 (see below).
+- For pulse/color magnification: a narrow band around the heart rate (e.g. 0.83–1.0 Hz), high α, and a large `--lambda-c` (e.g. 1000) so the fine levels, which mostly carry sensor noise, are amplified less. Check the printed level gains.
 - For motion magnification: match the frequency band to the motion you want to reveal, and keep the magnified motion under about 1 px (see below).
 
 ### What the parameters really do
 
 At startup the tool prints the effective band and the gain applied to each pyramid level. Two things decide how much you actually get:
 
-- **Per-level gains.** Level 0 (finest) and the coarsest level are never amplified. The levels in between get `alpha`, capped by `--lambda-c`. For face.mp4 (528×592, 4 levels, `-a 50`):
+- **Per-level gains.** In-band changes on a level with gain `g` are multiplied by exactly `1 + g`. Level 0 (finest) and the coarsest level (the low-pass residual) are never amplified. The levels in between get `α`, capped by `--lambda-c`, which shrinks the gain of levels whose spatial wavelength is short compared with `λc`. For face.mp4 (528×592, 4 levels):
 
-  | `--lambda-c` | level gains (finest → coarsest) |
-  |---|---|
-  | 1000 (default) | 0, 4.7, 11.5, 0 |
-  | 80 | 0, 50, 50, 0 |
-  | 16 | 0, 50, 50, 0 |
+  | `--lambda-c` | gains at `-a 10` (finest → coarsest) | gains at `-a 50` |
+  |---|---|---|
+  | 16 (default) | 0, 10, 10, 0 | 0, 50, 50, 0 |
+  | 80 | 0, 10, 10, 0 | 0, 50, 50, 0 |
+  | 1000 | 0, 0, 0.9, 0 | 0, 4.7, 11.5, 0 |
 
-  The filter then keeps half of the in-band signal, like the MATLAB reference, so the change added to the video is about half these numbers (issue #28).
+- **Spatial content.** Only the spatial detail carried by the amplified levels is magnified. On synthetic shapes a thin ring moves about 0.57× the requested amount and a filled circle about 0.44×, because part of their edges sits in level 0 or the low-pass residual (see [Synthetic validation](#synthetic-validation)).
 - **Frequency resolution.** A clip of `n` frames at `fps` can only separate frequencies `fps / n` apart: 0.1 Hz for face.mp4 (301 frames at 30 fps). A narrower band gives a warning, and a band that contains no frequency bin at all is an error. Use a longer clip for narrow bands.
 
 ### Synthetic validation
 
-`scripts/synthetic_shapes.py` renders circles, squares and rings whose size pulses by an exact sub-pixel amount, magnifies them, and measures the result against the ideal. Run it with `python scripts/synthetic_shapes.py`; `tests/test_synthetic_shapes.py` keeps the key results as tests. Findings, with `-a 10`, band 0.5–3 Hz, `--lambda-c 10`, 4 levels, on 128×128 frames:
+`scripts/synthetic_shapes.py` renders circles, squares and rings whose size pulses by an exact sub-pixel amount, magnifies them, and measures the result against the ideal. Run it with `python scripts/synthetic_shapes.py`; `tests/test_synthetic_shapes.py` keeps the key results as tests. Findings, asking for 10× (`-a 9`, since the output is `1 + α` times the input), band 0.5–3 Hz, `--lambda-c 10`, 4 levels, on 128×128 frames:
 
 | Check | Result |
 |---|---|
-| Motion inside the band | about **0.38×** the requested gain on a thin ring, 0.28× on a filled circle: the filter halves it, and the finest and coarsest levels are not amplified (issue #28) |
+| Motion inside the band | about **0.57×** the requested gain on a thin ring, 0.44× on a filled circle: the finest level and the low-pass residual, which carry the rest of the edge, are not amplified |
 | Motion outside the band | unchanged (1.0×) |
 | Phase lag | none |
 | Circles vs squares | same gain in every direction (about 3% spread) |

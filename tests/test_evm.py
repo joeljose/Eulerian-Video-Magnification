@@ -85,14 +85,13 @@ class TestIdealBandpassFilter:
 
         filtered = evm.ideal_bandpass_filter(data, fps, 1.0, 3.0)
 
-        # Pins the MATLAB-parity behaviour: the reference keeps positive
-        # frequencies only, so an in-band sine comes out at half amplitude
-        # (issue #28). Change this deliberately if #28 changes it.
+        # In-band signal passes at full amplitude, so alpha is the true
+        # gain (the MATLAB reference halves it; issue #28)
         # Fit the 2 Hz amplitude away from the clip's ends
         mid = slice(30, -30)
         basis = np.stack([np.sin(2 * np.pi * 2.0 * t), np.cos(2 * np.pi * 2.0 * t)], axis=1)[mid]
         coef, *_ = np.linalg.lstsq(basis, filtered[mid, 0, 0, 0], rcond=None)
-        assert np.hypot(*coef) == pytest.approx(0.5, abs=0.02)
+        assert np.hypot(*coef) == pytest.approx(1.0, abs=0.02)
 
     def test_rejects_out_of_band_signal(self):
         """A 10Hz sine wave with bandpass 1-3Hz should be zeroed."""

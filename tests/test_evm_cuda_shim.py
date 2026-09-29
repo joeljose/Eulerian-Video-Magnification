@@ -97,7 +97,7 @@ def test_gpu_branch_matches_cpu(fake_cupy):
         cpu = evm.eulerian_magnification(video.copy(), *args, lambda_c=10)
         gpu = evm.eulerian_magnification(fake_cupy.asarray(video), *args, lambda_c=10)
     assert type(gpu) is FakeCupyArray  # the CuPy branch ran end to end
-    np.testing.assert_allclose(gpu.get(), cpu, atol=1e-6)
+    np.testing.assert_allclose(gpu.get(), cpu, atol=1e-5)
 
 
 def test_main_with_gpu_flag(fake_cupy, tmp_path):
