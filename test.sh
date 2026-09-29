@@ -19,11 +19,7 @@ case "$MODE" in
         IMAGE="evm-dev"
         DOCKERFILE="Dockerfile"
         TEST_FILE="tests"
-        docker build \
-            --build-arg UID="$(id -u)" \
-            --build-arg GID="$(id -g)" \
-            --build-arg UNAME="$(whoami)" \
-            -f ${DOCKERFILE} -t ${IMAGE} .
+        docker build -f ${DOCKERFILE} -t ${IMAGE} .
         echo ""
         exec "$0" cpu
         ;;
@@ -39,11 +35,7 @@ esac
 # Build image if it doesn't exist
 if ! docker image inspect ${IMAGE} &>/dev/null; then
     echo "Image ${IMAGE} not found. Building..."
-    docker build \
-        --build-arg UID="$(id -u)" \
-        --build-arg GID="$(id -g)" \
-        --build-arg UNAME="$(whoami)" \
-        -f ${DOCKERFILE} -t ${IMAGE} .
+    docker build -f ${DOCKERFILE} -t ${IMAGE} .
     echo ""
 fi
 
@@ -53,7 +45,7 @@ docker run --rm --entrypoint "" ${IMAGE} ruff check .
 echo ""
 echo "=== Tests (${MODE}) ==="
 if [[ "$MODE" == "gpu" ]]; then
-    docker run --rm --gpus all --entrypoint "" ${IMAGE} python3 -m pytest ${TEST_FILE} -v
+    docker run --rm --gpus all --entrypoint "" ${IMAGE} python -m pytest ${TEST_FILE} -v
 else
     docker run --rm --entrypoint "" ${IMAGE} python -m pytest ${TEST_FILE} -v
 fi

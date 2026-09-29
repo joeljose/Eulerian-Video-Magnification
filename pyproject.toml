@@ -10,13 +10,20 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.20.3,<3",
-    "opencv-python>=4.7.0,<5",
-    "scipy>=1.7.1,<2",
+    "numpy>=1.23,<3",
+    "opencv-python-headless>=4.7.0,<5",
+    "scipy>=1.9,<2",
 ]
 
 [project.optional-dependencies]
-cuda = ["cupy-cuda12x>=12.0.0,<14"]
+# CuPy plus the CUDA libraries as pip wheels; needs only the NVIDIA driver
+cuda = [
+    "cupy-cuda12x>=13,<14",
+    "nvidia-cuda-runtime-cu12>=12,<13",
+    "nvidia-cuda-nvrtc-cu12>=12,<13",
+    "nvidia-cufft-cu12>=11,<12",
+    "nvidia-cublas-cu12>=12,<13",
+]
 
 [project.scripts]
 evm = "evm:main"
