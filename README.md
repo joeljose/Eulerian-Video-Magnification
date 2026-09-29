@@ -264,7 +264,7 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | Flag | Default | Description |
 |---|---|---|
 | `-i / --input` | *(required)* | Input video path |
-| `-o / --output` | `<input>_magnified.avi` | Output video path |
+| `-o / --output` | `<input>_magnified.avi` | Output video path. The extension picks the format: `.mkv` (FFV1, **lossless**), `.avi` (MJPG, lossy) or `.mp4` (MPEG-4, lossy). Use `.mkv` for analysis: JPEG compression noise can be as large as the sub-1% colour changes EVM reveals |
 | `-fl / --freq-low` | 0.5 | Lower cutoff frequency (Hz) |
 | `-fh / --freq-high` | 2.0 | Upper cutoff frequency (Hz) |
 | `-a / --amplification` | 10 | Amplification factor α: in-band changes on each amplified level are multiplied by exactly `1 + α` (capped per level by `--lambda-c`) |
@@ -272,6 +272,7 @@ python evm.py -i guitar.mp4 -fl 72 -fh 92 -a 50 --lambda-c 10 --chrom-attenuatio
 | `--lambda-c` | 16 | Cutoff spatial wavelength in pixels (paper Figure 6). Structures smaller than this get reduced amplification, so **lower = stronger amplification**. The effective per-level gains are printed at startup. |
 | `--chrom-attenuation` | 1.0 | Color channel attenuation (0=luminance only, 1=full) |
 | `--fps` | *(from video)* | Frame rate of the input, for files that don't report one |
+| `--keep-audio` | off | Copy the input's audio track into the output. Needs `ffmpeg` on the PATH (not included in the Docker images); if the container can't hold the audio codec, it warns and keeps the video without audio |
 | `--version` | — | Show program version and exit |
 
 ### GPU

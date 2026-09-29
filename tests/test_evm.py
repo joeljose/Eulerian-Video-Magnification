@@ -330,6 +330,51 @@ class TestDrift:
         assert np.abs(out).max() < 0.02
 
 
+class TestOutputFormats:
+    """The output extension picks the codec (issue #43)."""
+
+    def test_mkv_is_lossless(self, tmp_path):
+        video = evm.rgb_to_yiq(np.random.RandomState(0).rand(5, 48, 64, 3).astype(np.float32))
+        path = str(tmp_path / "out.mkv")
+        evm.save_video(video, 30.0, path)
+        frames, fps = evm.read_frames(path)
+        np.testing.assert_array_equal(frames, evm.yiq_to_bgr8(video))
+        assert fps == 30.0
+
+    @pytest.mark.parametrize("ext", [".avi", ".mp4"])
+    def test_lossy_formats_write(self, tmp_path, ext):
+        video = evm.rgb_to_yiq(np.full((5, 48, 64, 3), 0.5, np.float32))
+        path = str(tmp_path / f"out{ext}")
+        evm.save_video(video, 30.0, path)
+        assert evm.read_frames(path)[0].shape == (5, 48, 64, 3)
+
+    def test_unsupported_extension(self):
+        with pytest.raises(ValueError, match="unsupported output extension"):
+            evm.output_codec("out.webm")
+
+    def test_copy_audio_without_ffmpeg(self, tmp_path):
+        with patch("shutil.which", return_value=None):
+            assert evm.copy_audio(str(tmp_path / "a.mkv"), "in.mp4") is False
+
+
+@pytest.mark.skipif(evm.shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_keep_audio_end_to_end(tmp_path):
+    clip = str(tmp_path / "clip.avi")
+    evm.save_video(evm.rgb_to_yiq(np.full((40, 32, 32, 3), 0.5, np.float32)), 30.0, clip)
+    with_audio = str(tmp_path / "clip_audio.mkv")
+    subprocess.run(["ffmpeg", "-v", "error", "-i", clip, "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=2", "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy", "-shortest", with_audio], check=True)
+    out = str(tmp_path / "out.mkv")
+    result = subprocess.run([sys.executable, EVM_SCRIPT, "-i", with_audio, "-o", out,
+                             "-fl", "1", "-fh", "3", "--keep-audio"],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    streams = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                              "-of", "csv=p=0", out], capture_output=True, text=True).stdout
+    assert streams.split() == ["video", "audio"]
+
+
 class TestRounding:
     def test_save_video_rounds_to_nearest(self, tmp_path):
         written = []
@@ -516,6 +561,11 @@ class TestInputValidation:
         code, stderr = run_evm("-i", dummy_video, "--gpu")
         assert code == 1
         assert "requires CuPy" in stderr
+
+    def test_unsupported_output_extension(self, dummy_video, tmp_path):
+        code, stderr = run_evm("-i", dummy_video, "-o", str(tmp_path / "out.webm"))
+        assert code == 1
+        assert "unsupported output extension" in stderr
 
     def test_output_dir_missing(self, dummy_video, tmp_path):
         out = str(tmp_path / "missing" / "out.avi")

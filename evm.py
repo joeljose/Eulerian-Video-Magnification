@@ -19,6 +19,8 @@ __version__ = "2.1.0"
 import argparse
 import math
 import os
+import shutil
+import subprocess
 import sys
 import time
 
@@ -150,14 +152,33 @@ def load_video(path, fps=None, xp=np):
     return frames_to_yiq(frames, xp), fps
 
 
+# Codec per output extension. FFV1 in .mkv is lossless; MJPG and MPEG-4
+# Part 2 (mp4v) are lossy. H.264 isn't in OpenCV's pip builds.
+CODECS = {'.mkv': 'FFV1', '.avi': 'MJPG', '.mp4': 'mp4v'}
+
+
+def output_codec(path):
+    """The codec for an output path, from its extension.
+
+    Raises ValueError for an unsupported extension.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in CODECS:
+        raise ValueError(f"unsupported output extension {ext or '(none)'!r}; use "
+                         + ", ".join(f"{e} ({c})" for e, c in CODECS.items()))
+    return CODECS[ext]
+
+
 def open_writer(path, fps, frame_size):
-    """An MJPG VideoWriter for `path`, frame_size = (width, height).
+    """A VideoWriter for `path`, frame_size = (width, height), with the
+    codec chosen by output_codec().
 
     Raises RuntimeError if it can't be opened (missing codec, bad path).
     """
-    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'MJPG'), fps, frame_size, True)
+    codec = output_codec(path)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), fps, frame_size, True)
     if not writer.isOpened():
-        raise RuntimeError(f"could not open video writer for {path} (MJPG)")
+        raise RuntimeError(f"could not open video writer for {path} ({codec})")
     return writer
 
 
@@ -182,9 +203,33 @@ def close_writer(writer, path):
     print(f"Output saved to {path}")
 
 
+def copy_audio(video_path, source_path):
+    """Copy the audio track of source_path into video_path with ffmpeg.
+
+    The video stream is copied unchanged. Returns False, leaving
+    video_path as it is, if ffmpeg is missing or fails (for example when
+    the container can't hold that audio codec).
+    """
+    ffmpeg = shutil.which('ffmpeg')
+    if ffmpeg is None:
+        return False
+    root, ext = os.path.splitext(video_path)
+    tmp = f"{root}.audio{ext}"
+    result = subprocess.run(
+        [ffmpeg, '-v', 'error', '-y', '-i', video_path, '-i', source_path,
+         '-map', '0:v', '-map', '1:a?', '-c', 'copy', '-shortest', tmp],
+        capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
+    os.replace(tmp, video_path)
+    return True
+
+
 def save_video(video_yiq, fps, path):
-    """Save a YIQ float video array (numpy or cupy) to an AVI file with
-    MJPG codec."""
+    """Save a YIQ float video array (numpy or cupy) to a video file; the
+    extension picks the codec (see CODECS)."""
     writer = open_writer(path, fps, (video_yiq.shape[2], video_yiq.shape[1]))
     try:
         write_yiq(writer, video_yiq)
@@ -523,7 +568,9 @@ def main(argv=None):
     )
     parser.add_argument(
         '-o', '--output', default=None,
-        help='Output video path (default: <input>_magnified.avi)'
+        help='Output video path; the extension picks the format: .mkv '
+             '(FFV1, lossless), .avi (MJPG) or .mp4 (MPEG-4). '
+             'Default: <input>_magnified.avi'
     )
     parser.add_argument(
         '-fl', '--freq-low', type=float, default=0.5,
@@ -560,6 +607,10 @@ def main(argv=None):
              '0.0 = luminance only (default: 1.0)'
     )
 
+    parser.add_argument(
+        '--keep-audio', action='store_true',
+        help="Copy the input's audio track into the output (needs ffmpeg)"
+    )
     parser.add_argument(
         '--gpu', action='store_true',
         help='Run on an NVIDIA GPU with CuPy (install requirements-cuda.txt)'
@@ -648,9 +699,14 @@ def main(argv=None):
         print(f"Error: output directory is not writable: {out_dir}",
               file=sys.stderr)
         sys.exit(1)
-    if not args.output.lower().endswith('.avi'):
-        print("Warning: output is always MJPG; use a .avi extension",
-              file=sys.stderr)
+    try:
+        output_codec(args.output)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.keep_audio and shutil.which('ffmpeg') is None:
+        print("Warning: --keep-audio needs ffmpeg on the PATH; the output "
+              "will have no audio", file=sys.stderr)
 
     # --- Load video ---
     print(f"Loading {args.input}...")
@@ -726,6 +782,12 @@ def main(argv=None):
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    if args.keep_audio and shutil.which('ffmpeg') is not None:
+        if copy_audio(args.output, args.input):
+            print("  Audio copied from the input")
+        else:
+            print("Warning: could not copy the audio (the output container "
+                  "may not support its codec; try .mkv)", file=sys.stderr)
     print(f"Total processing time: {format_duration(time.time() - t0)}")
 
 
