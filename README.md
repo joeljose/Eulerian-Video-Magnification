@@ -24,7 +24,7 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [Color Space](#color-space)
   - [Temporal Filtering](#temporal-filtering)
   - [Adaptive Amplification](#adaptive-amplification)
-  - [Optimizations (CLI only)](#optimizations-cli-only)
+  - [Memory and Speed](#memory-and-speed)
 - [Setup](#setup)
   - [A. Google Colab](#a-google-colab)
   - [B. Local Setup](#b-local-setup)
@@ -32,7 +32,7 @@ This is a Python implementation of MIT CSAIL's paper, ["Eulerian Video Magnifica
   - [D. GPU (CUDA)](#d-gpu-cuda)
 - [Usage](#usage)
   - [CLI Tool](#cli-tool)
-  - [GPU CLI Tool](#gpu-cli-tool)
+  - [GPU](#gpu)
   - [Notebook](#notebook)
   - [Tips](#tips)
 - [Development](#development)
@@ -144,13 +144,20 @@ Per-level alpha is computed based on `lambda_c` and the representative spatial w
 - **Level 0 (finest, full resolution)** — captures the highest spatial frequencies (sharpest edges and fine details). The spatial wavelengths are so short that even modest amplification breaks the first-order Taylor approximation, producing ringing and ghosting artifacts.
 - **Coarsest level (low-pass residual)** — this is not a true bandpass level; it is the Gaussian remainder (`gauss[-1]`) appended directly to the pyramid. It contains the DC component (overall mean intensity), so amplifying it would shift global brightness rather than reveal temporal variations.
 
-### Optimizations (CLI only)
+### Memory and Speed
 
-- Skip FFT on zeroed levels (level 0 and coarsest)
-- Free intermediate arrays immediately after use
-- Vectorized YIQ conversion
-- Progress reporting with ETA
-- Nyquist frequency validation
+Collapsing a Laplacian pyramid is linear, and only the levels with a non-zero gain change, so the output is `input + collapse(amplified levels)`. The pipeline therefore stores only the amplified levels (1 to N-2, at most a third of the video's size) and never level 0 or the low-pass residual. The CLI keeps the decoded frames as uint8, converts them to YIQ a block of 8 frames at a time, and writes each output block as soon as it's ready. The temporal filter works on 32 MB chunks of pixels.
+
+Measured on face.mp4 (301 frames, 528×592, 4 levels; Ryzen 7 7445HS, RTX 4050 Laptop 6 GB):
+
+| | peak memory | time |
+|---|---:|---:|
+| CPU, peak RAM (RSS) | 0.90 GiB (4.1 GiB in v2.1.0) | 5.6 s |
+| GPU, peak VRAM (cupy pool) | 0.88 GiB | 1.8 s (mostly decoding) |
+
+As a rule of thumb, RAM is about 2.3× the uint8 video (`frames × height × width × 3` bytes) plus 0.4 GB. The GPU needs about 1.25× the uint8 video in VRAM plus 0.4 GB; `--gpu` prints its estimate before starting.
+
+- Nyquist and empty-band validation, progress reporting with ETA
 - Synthetic validation against exact ground truth (see [below](#synthetic-validation))
 
 ---
@@ -238,7 +245,7 @@ docker run --gpus all --rm \
 
 The image runs `evm.py --gpu`: the same code as the CPU version, on CuPy arrays (backed by cuFFT). The CPU and GPU give the same result to float precision. It automatically checks available VRAM before processing and exits with a clear error if the video is too large.
 
-**VRAM requirements:** Depends on video resolution and length. The tool prints exact requirements before starting. As a rough guide: a 300-frame 264x296 video needs ~0.5 GB, a 1080p 30s video at 30fps needs ~4-5 GB.
+**VRAM requirements:** Depends on video resolution and length; the tool prints its estimate before starting (measured to be within 25%). face.mp4 (301 frames, 528×592) needs about 0.9 GB; a 1080p 30 s clip at 30 fps needs about 7.6 GB of VRAM, plus about 5.6 GB of host RAM for the decoded frames. See [Memory and Speed](#memory-and-speed).
 
 ---
 

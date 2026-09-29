@@ -120,60 +120,58 @@ class TestIdealBandpassFilter:
         np.testing.assert_allclose(filtered, 0.0, atol=1e-6)
 
 
-class TestLaplacianPyramid:
-    """Build pyramid then collapse — reconstruction should approximate original."""
+def reference_magnification(video, fps, fl, fh, alpha, levels, lambda_c, chrom):
+    """The pre-#32 pipeline: full pyramid per frame with OpenCV, filter and
+    amplify every level, collapse. magnify_blocks must match it."""
+    n, h, w = video.shape[:3]
+    pyr = []
+    for f in video:
+        g = [f]
+        for _ in range(1, levels):
+            g.append(cv2.pyrDown(g[-1]))
+        lap = [g[i] - cv2.pyrUp(g[i + 1], dstsize=g[i].shape[1::-1]) for i in range(levels - 1)]
+        pyr.append(lap + [g[-1]])
+    pyr = [np.stack([p[i] for p in pyr]) for i in range(levels)]
+    gains = evm.compute_level_alphas(h, w, levels, alpha, lambda_c)
+    for i, a in enumerate(gains):
+        if a:
+            filtered = evm.ideal_bandpass_filter(pyr[i], fps, fl, fh)
+            pyr[i] += filtered * np.array([a, a * chrom, a * chrom], np.float32)
+    out = []
+    for t in range(n):
+        img = pyr[-1][t]
+        for i in range(levels - 2, -1, -1):
+            img = cv2.pyrUp(img, dstsize=pyr[i].shape[2:0:-1]) + pyr[i][t]
+        out.append(img)
+    return np.stack(out)
 
-    def test_roundtrip_reconstruction(self):
-        """Build Laplacian pyramid of one frame, collapse it, compare to original."""
-        rng = np.random.RandomState(42)
-        # Use power-of-2 dimensions for clean pyrDown/pyrUp
-        frame = rng.rand(64, 64, 3).astype(np.float32)
 
-        # Build Gaussian pyramid
-        n_levels = 4
-        gauss = [frame]
-        for _ in range(1, n_levels):
-            gauss.append(cv2.pyrDown(gauss[-1]))
+class TestPipeline:
+    """Storing only the amplified levels gives the same result as the full
+    pyramid (issue #32)."""
 
-        # Build Laplacian pyramid
-        lap = []
-        for i in range(n_levels - 1):
-            up = cv2.pyrUp(gauss[i + 1], dstsize=(gauss[i].shape[1], gauss[i].shape[0]))
-            lap.append(gauss[i] - up)
-        lap.append(gauss[-1])
+    @pytest.mark.parametrize("shape, levels, lambda_c", [
+        ((70, 48, 64), 4, 10), ((40, 37, 51), 5, 16), ((40, 32, 32), 3, 1000)])
+    def test_matches_full_pyramid(self, shape, levels, lambda_c):
+        rng = np.random.RandomState(0)
+        video = evm.rgb_to_yiq(rng.rand(*shape, 3).astype(np.float32))
+        args = (30.0, 0.5, 3.0, 20.0)
+        expected = reference_magnification(video, *args, levels, lambda_c, 0.5)
+        got = evm.eulerian_magnification(video, *args, pyramid_levels=levels,
+                                         lambda_c=lambda_c, chrom_attenuation=0.5)
+        np.testing.assert_allclose(got, expected, atol=1e-5)
 
-        # Collapse
-        reconstructed = evm.collapse_laplacian_pyramid(lap)
+    def test_in_place(self):
+        video = evm.rgb_to_yiq(np.random.RandomState(1).rand(40, 32, 32, 3).astype(np.float32))
+        expected = evm.eulerian_magnification(video, 30.0, 0.5, 3.0, 20.0, lambda_c=10)
+        got = evm.eulerian_magnification(video, 30.0, 0.5, 3.0, 20.0, lambda_c=10, out=video)
+        assert got is video
+        np.testing.assert_allclose(got, expected, atol=1e-6)
 
-        # Reconstruction error should be tiny (float32 precision)
-        error = np.max(np.abs(reconstructed - frame))
-        assert error < 1e-4, f"Max reconstruction error: {error}"
-
-    def test_pyramid_level_shapes(self):
-        """Verify create_laplacian_video_pyramid produces correct shapes."""
-        rng = np.random.RandomState(42)
-        video = rng.rand(10, 32, 32, 3).astype(np.float32)
-        pyramid = evm.create_laplacian_video_pyramid(video, 3)
-
-        assert len(pyramid) == 3
-        assert pyramid[0].shape == (10, 32, 32, 3)  # level 0: full res
-        assert pyramid[1].shape == (10, 16, 16, 3)  # level 1: half
-        assert pyramid[2].shape == (10, 8, 8, 3)    # level 2: quarter
-
-    def test_pyramid_values_finite(self):
-        """No NaN or Inf in pyramid output."""
-        rng = np.random.RandomState(42)
-        video = rng.rand(5, 16, 16, 3).astype(np.float32)
-        pyramid = evm.create_laplacian_video_pyramid(video, 3)
-
-        for level in pyramid:
-            assert np.all(np.isfinite(level)), "Pyramid contains NaN or Inf"
-
-    def test_pyramid_dtype(self):
-        video = np.random.rand(5, 16, 16, 3).astype(np.float32)
-        pyramid = evm.create_laplacian_video_pyramid(video, 2)
-        for level in pyramid:
-            assert level.dtype == np.float32
+    def test_no_amplified_level_returns_input(self):
+        video = np.random.RandomState(2).rand(10, 16, 16, 3).astype(np.float32)
+        out = evm.eulerian_magnification(video, 30.0, 0.5, 3.0, 20.0, pyramid_levels=2)
+        np.testing.assert_array_equal(out, video)
 
 
 # ---------------------------------------------------------------------------
@@ -341,26 +339,24 @@ class TestPyramidMatchesOpenCV:
 
 
 class TestEstimateVramBytes:
-    """Pure arithmetic — exact equality."""
+    # (frames, height, width) -> peak bytes measured on an RTX 4050 with
+    # cupy's memory pool, 4 levels (see estimate_vram_bytes)
+    MEASURED = [
+        ((301, 592, 528), 935_528_960),
+        ((150, 592, 528), 559_264_256),
+        ((60, 592, 528), 484_808_192),
+        ((60, 1080, 1920), 1_578_714_112),
+        ((200, 720, 1280), 1_299_544_064),
+        ((900, 240, 320), 842_049_536),
+    ]
 
-    def test_known_values(self):
-        # 100 frames, 480x640, 4 levels
-        # Level 0: 100 * 480 * 640 * 12 = 368,640,000
-        # Level 1: 100 * 240 * 320 * 12 = 92,160,000
-        # Level 2: 100 * 120 * 160 * 12 = 23,040,000
-        # Level 3: 100 * 60 * 80 * 12   = 5,760,000
-        # Pyramid total = 489,600,000
-        # FFT buffer (level 1): 100 * 240 * 320 * 3 * 8 = 184,320,000
-        # Total = 673,920,000
-        result = evm.estimate_vram_bytes(100, 480, 640, 4)
-        assert result == 673_920_000
+    @pytest.mark.parametrize("size, measured", MEASURED)
+    def test_within_25_percent_of_measured(self, size, measured):
+        estimate = evm.estimate_vram_bytes(*size, 4)
+        assert 0.75 <= estimate / measured <= 1.25
 
-    def test_single_frame(self):
-        result = evm.estimate_vram_bytes(1, 100, 100, 2)
-        # Level 0: 1 * 100 * 100 * 12 = 120,000
-        # Level 1: 1 * 50 * 50 * 12 = 30,000
-        # FFT buffer: 1 * 50 * 50 * 24 = 60,000
-        assert result == 210_000
+    def test_grows_with_frames(self):
+        assert evm.estimate_vram_bytes(200, 480, 640, 4) > evm.estimate_vram_bytes(100, 480, 640, 4)
 
 
 class TestVersion:
