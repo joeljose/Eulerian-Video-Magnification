@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The CUDA image is only built in CI when its inputs change (#34)
 
 ### Added
+- The output extension picks the format: `.mkv` writes lossless FFV1 (frames match the 8-bit output exactly), `.avi` MJPG and `.mp4` MPEG-4; other extensions are rejected before processing instead of writing MJPG into any container (#43)
+- `--keep-audio` copies the input's audio track into the output with ffmpeg (#43)
 - Golden regression test on a crop of face.mp4 (`tests/data/golden_face.npz`, regenerated with `scripts/make_golden.py`), run on the CPU, through the fake-CuPy shim and on a real GPU; a CLI test that runs to completion on a real clip; the filter's half-amplitude output is now pinned exactly (#38)
 - `eulerian_magnification(..., out=video)` magnifies in place; `magnify_blocks()` yields the output in blocks for streaming (#32)
 - The notebook imports `evm` instead of keeping its own copy of the algorithm, and plots the forehead's brightness before and after (#37)
