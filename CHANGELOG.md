@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-29
+
 ### Changed (breaking: default output changes)
 - `-a` is now the true gain: in-band changes on every amplified level are multiplied by exactly `1 + α`. The temporal filter used to keep positive frequencies only, like the MATLAB reference, which halved the in-band signal; it now passes it at full amplitude. For the old look, halve `-a` (#28)
 - New defaults `-a 10 --lambda-c 16` (MATLAB's Laplacian example settings) instead of `-a 50 --lambda-c 1000`. With the old `--lambda-c 1000`, `-a` was capped far below the requested value on most videos (on face.mp4, `-a 50` gave per-level gains of 4.7 and 11.5, then halved); now the requested gain is what the amplified levels get. For pulse detection use a large `--lambda-c`, e.g. `-a 50 -fl 0.83 -fh 1.0 --lambda-c 1000` (#28)
 - The golden regression output is regenerated for these changes
+- Output changes slightly in other ways too: pixels are rounded instead of truncated, and slow drift no longer leaks into the band (see Fixed)
 
 ### Fixed
 - Peak memory: the pipeline stores only the amplified pyramid levels and adds their collapse to the input, and the CLI keeps frames as uint8 and writes output as it goes. face.mp4 peaks at 0.90 GiB of RAM instead of 4.1 GiB, and 0.88 GiB of VRAM, with the same output (#32)
@@ -28,13 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--lambda-c` help and docs described its effect backwards: lower values give stronger amplification (#28)
 
 ### Changed
-- The CPU temporal filter runs SciPy's FFT on all cores (`workers=-1`): the filter is about 3x faster and face.mp4 takes 4.9 s instead of 5.4 s end to end (#40)
+- The CPU temporal filter runs SciPy's FFT on all cores (`workers=-1`): the filter is about 3x faster and face.mp4 takes 4.8 s instead of 5.5 s end to end on an idle 12-thread CPU (#40)
 - Reproducible builds: the images install from hash-locked `requirements.lock` / `requirements-cuda.lock` on a digest-pinned `python:3.11.16-slim`; Actions are pinned by SHA and Dependabot watches them (#41)
 - The CUDA image is Python 3.11 slim plus CuPy and the CUDA libraries as pip wheels instead of `nvidia/cuda:*-devel` (12.7 GB to 3.5 GB, and the same Python as the CPU image); `opencv-python-headless` everywhere (CPU image 1.13 GB to 0.78 GB) (#41)
 - Images use a fixed non-root user, so `docker build .` needs no build args; run with `--user "$(id -u):$(id -g)"` to write into a mounted folder (#41)
 - `evm.py` and `evm_cuda.py` are merged into one implementation: `python evm.py --gpu [--device N]` runs the same code on CuPy arrays. `evm_cuda.py` remains for one release and runs `evm.py --gpu`; the CUDA Docker image runs `evm.py --gpu` (#39)
 - The version is kept in `VERSION` and `evm.__version__` only (no more `-cuda` suffix, which SemVer reads as a pre-release) (#39)
-- The pyramid is built and collapsed in blocks of 32 frames instead of one frame at a time
 - `--freq-high` above the Nyquist frequency is now an error instead of a warning
 - The narrow-band warning now fires when the band is narrower than the clip's frequency resolution (`fps / frames`)
 - The temporal filter uses a real FFT (`rfft`), which halves its working memory
@@ -44,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - The output extension picks the format: `.mkv` writes lossless FFV1 (frames match the 8-bit output exactly), `.avi` MJPG and `.mp4` MPEG-4; other extensions are rejected before processing instead of writing MJPG into any container (#43)
 - `--keep-audio` copies the input's audio track into the output with ffmpeg (#43)
-- Golden regression test on a crop of face.mp4 (`tests/data/golden_face.npz`, regenerated with `scripts/make_golden.py`), run on the CPU, through the fake-CuPy shim and on a real GPU; a CLI test that runs to completion on a real clip; the filter's half-amplitude output is now pinned exactly (#38)
+- Golden regression test on a crop of face.mp4 (`tests/data/golden_face.npz`, regenerated with `scripts/make_golden.py`), run on the CPU, through the fake-CuPy shim and on a real GPU; a CLI test that runs to completion on a real clip; the filter's full-amplitude output is pinned exactly (#38)
 - `eulerian_magnification(..., out=video)` magnifies in place; `magnify_blocks()` yields the output in blocks for streaming (#32)
 - The notebook imports `evm` instead of keeping its own copy of the algorithm, and plots the forehead's brightness before and after (#37)
 - README section "What the parameters really do" (#42)
@@ -52,7 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--fps` to set the input frame rate for files that don't report one
 - Synthetic validation: `scripts/synthetic_shapes.py` and `tests/test_synthetic_shapes.py` measure gain, phase lag and isotropy on pulsating shapes with exact ground truth (adapted from Motion-Magnification-Using-2D-DTCWT)
 - The effective frequency band, bin count and per-level gains are printed at startup (#28, #29)
-- CI runs the unit tests, checks that the output is magnified, and runs `evm_cuda.py` on the CPU through a CuPy shim (#34)
+- CI runs the unit tests, checks that the output is magnified, and runs the GPU code path on the CPU through a fake CuPy (#34, #39)
+
+### Deprecated
+- `evm_cuda.py`: use `python evm.py --gpu`. It still works in this release and will be removed in the next major version (#39)
+
+### Removed
+- `create_laplacian_video_pyramid()`, `collapse_laplacian_pyramid()` and `collapse_laplacian_video_pyramid()`: the pipeline no longer builds the full pyramid; use `eulerian_magnification()` or `magnify_blocks()` (#32)
+- The `UID`/`GID`/`UNAME` Docker build arguments (#41)
 
 ## [2.1.0] - 2026-03-20
 

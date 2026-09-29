@@ -14,7 +14,7 @@ Changes in the World", SIGGRAPH 2012.
 Algorithm follows the reference MATLAB implementation from MIT CSAIL.
 """
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 
 import argparse
 import math

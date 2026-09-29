@@ -390,14 +390,14 @@ Version is tracked in a `VERSION` file at the project root, and `evm.py` has `__
 
 **To cut a release:**
 1. Update `VERSION` with the new version number
-2. Update `__version__` in `evm.py` (e.g., `"2.1.0"`)
+2. Update `__version__` in `evm.py` (e.g., `"3.0.0"`)
 3. Update `CHANGELOG.md` — move items from `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`
 4. Commit: `Release vX.Y.Z`
 5. Tag: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 6. Push: `git push && git push origin vX.Y.Z`
 7. Rebuild Docker images: `./docker-build.sh` and `./docker-build-cuda.sh`
 
-Docker build scripts read from `VERSION` and tag images accordingly (e.g., `evm:2.1.0`, `evm-cuda:2.1.0`). Images also carry a `version` label visible via `docker inspect`.
+Docker build scripts read from `VERSION` and tag images accordingly (e.g., `evm:3.0.0`, `evm-cuda:3.0.0`). Images also carry a `version` label visible via `docker inspect`.
 
 ### Project Structure
 
