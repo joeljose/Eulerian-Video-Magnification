@@ -179,7 +179,7 @@ pip install -r requirements.txt matplotlib requests
 jupyter notebook Eulerian_Video_Magnification.ipynb
 ```
 
-**Requirements:** Python 3.8+
+**Requirements:** Python 3.10+ (tested on 3.10 and 3.11)
 
 ### C. Docker
 
@@ -288,14 +288,29 @@ The tool prints the GPU name, estimated VRAM usage, and available memory before 
 
 ### Notebook
 
-Open the notebook and run all cells. By default, it downloads a sample face video from the original paper and magnifies it. To use your own video, change the `filename` variable.
+Open the notebook and run all cells. On Colab it clones this repository and imports `evm.py`, so it runs the same code as the CLI, on the bundled `face.mp4` from the original paper. To use your own video, upload it and change the `filename` variable.
 
 ### Tips
 
 - Use `show_frequencies()` in the notebook to visualize frequency content before choosing cutoff frequencies.
 - Start with low amplification and increase gradually.
-- For pulse/color magnification: 0.5–2 Hz, high amplification (50+).
+- For pulse/color magnification: 0.5–2 Hz, high amplification (50+). Check the printed level gains: with the default `--lambda-c 1000`, `-a 50` on face.mp4 only gets gains of 4.7 and 11.5 (see below).
 - For motion magnification: match the frequency band to the motion you want to reveal, and keep the magnified motion under about 1 px (see below).
+
+### What the parameters really do
+
+At startup the tool prints the effective band and the gain applied to each pyramid level. Two things decide how much you actually get:
+
+- **Per-level gains.** Level 0 (finest) and the coarsest level are never amplified. The levels in between get `alpha`, capped by `--lambda-c`. For face.mp4 (528×592, 4 levels, `-a 50`):
+
+  | `--lambda-c` | level gains (finest → coarsest) |
+  |---|---|
+  | 1000 (default) | 0, 4.7, 11.5, 0 |
+  | 80 | 0, 50, 50, 0 |
+  | 16 | 0, 50, 50, 0 |
+
+  The filter then keeps half of the in-band signal, like the MATLAB reference, so the change added to the video is about half these numbers (issue #28).
+- **Frequency resolution.** A clip of `n` frames at `fps` can only separate frequencies `fps / n` apart: 0.1 Hz for face.mp4 (301 frames at 30 fps). A narrower band gives a warning, and a band that contains no frequency bin at all is an error. Use a longer clip for narrow bands.
 
 ### Synthetic validation
 
